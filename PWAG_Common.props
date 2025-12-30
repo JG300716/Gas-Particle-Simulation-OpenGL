@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+	<ImportGroup Label="PropertySheets" />
+
+	<PropertyGroup Label="UserMacros" />
+
+	<!-- ============================================================================ -->
+	<!-- VC++ Directories - Include i Library paths -->
+	<!-- ============================================================================ -->
+	<PropertyGroup>
+		<!-- Include Directories - gdzie są pliki .h -->
+		<IncludePath>$(SolutionDir)lib\GLFW\include;$(SolutionDir)lib\GLAD\include;$(SolutionDir)lib\GLM;$(SolutionDir)lib\ImGui;$(SolutionDir)lib\ImGui\backends;$(IncludePath)</IncludePath>
+		<!-- Library Directories - gdzie są pliki .lib -->
+		<LibraryPath>$(SolutionDir)lib\GLFW\lib-vc2022;$(SolutionDir)lib\ImGui;$(LibraryPath)</LibraryPath>
+	</PropertyGroup>
+
+	<!-- ============================================================================ -->
+	<!-- Compiler and Linker Settings -->
+	<!-- ============================================================================ -->
+	<ItemDefinitionGroup>
+
+		<!-- C++ Compiler Settings -->
+		<ClCompile>
+			<!-- C++20 Standard -->
+			<LanguageStandard>stdcpp20</LanguageStandard>
+
+			<!-- Additional options (opcjonalne) -->
+			<WarningLevel>Level3</WarningLevel>
+			<SDLCheck>true</SDLCheck>
+		</ClCompile>
+
+		<!-- Linker Settings -->
+		<Link>
+			<!-- Additional Dependencies - biblioteki do zlinkowania -->
+			<AdditionalDependencies>glfw3dll.lib;opengl32.lib;ImGui.lib;%(AdditionalDependencies)</AdditionalDependencies>
+		</Link>
+
+		<!-- Post-Build Event - kopiowanie DLL -->
+		<PostBuildEvent>
+			<Command>xcopy /Y /D "$(SolutionDir)lib\GLFW\lib-vc2022\glfw3.dll" "$(OutDir)"</Command>
+			<Message>Copying GLFW DLL to output directory</Message>
+		</PostBuildEvent>
+
+	</ItemDefinitionGroup>
+
+	<ItemGroup />
+</Project>
