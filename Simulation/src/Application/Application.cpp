@@ -144,9 +144,11 @@ bool Application::initializeSimulation() {
         return false;
     }
     
-    m_camera.setPosition(glm::vec3(0.0f, 0.0f, 120.0f));
-    m_camera.rotate(-90.0f, 0.0f);
-    m_camera.setNearFar(0.1f, 1000.0f); // Zwiększony far plane dla większych grid'ów
+    // Oddalona kamera dla lepszego widoku grid boxa (100x100x100)
+    // Pozycja wyżej i dalej, żeby zobaczyć cały grid
+    m_camera.setPosition(glm::vec3(0.0f, 80.0f, 250.0f));
+    m_camera.rotate(-90.0f, -15.0f); // Lekko w dół, żeby patrzeć na grid
+    m_camera.setNearFar(0.1f, 2000.0f); // Zwiększony far plane dla większych grid'ów
     
     return true;
 }

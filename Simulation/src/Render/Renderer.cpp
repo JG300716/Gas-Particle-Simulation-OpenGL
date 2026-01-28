@@ -246,6 +246,29 @@ void Renderer::renderGridWireframe(const Grid& grid) {
     glBindVertexArray(0);
 }
 
+GLuint Renderer::createComputeProgram(const char* compPath)
+{
+    GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+    glShaderSource(shader, 1, &compPath, nullptr);
+    glCompileShader(shader);
+
+    GLint ok;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[2048];
+        glGetShaderInfoLog(shader, 2048, nullptr, log);
+        throw std::runtime_error(log);
+    }
+
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, shader);
+    glLinkProgram(prog);
+
+    glDeleteShader(shader);
+    return prog;
+}
+
+
 void Renderer::clear(float r, float g, float b, float a) {
     glClearColor(r, g, b, a);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

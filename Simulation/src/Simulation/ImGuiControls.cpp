@@ -64,12 +64,22 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
         simulation.setGravity(-9.81f);
     }
     float dampingFactor = simulation.getDampingFactor();
-    if (ImGui::SliderFloat("Damping", &dampingFactor, 0.0f, 3.0f)) {
+    if (ImGui::SliderFloat("Damping", &dampingFactor, 0.0f, 1.0f)) {
         simulation.setDampingFactor(dampingFactor);
     }
     ImGui::SameLine();
     if (ImGui::Button("Reset##Damping")) {
         simulation.setDampingFactor(0.5f);
+    }
+
+    // Cell size
+    float cellSize = simulation.getCellSize();
+    if (ImGui::SliderFloat("Cell Size", &cellSize, 0.01f, 5.0f)) {
+        simulation.setCellSize(cellSize);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset##CellSize")) {
+        simulation.setCellSize(1.0f);
     }
     
     // Time scale

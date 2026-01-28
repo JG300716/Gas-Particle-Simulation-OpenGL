@@ -1,69 +1,97 @@
 ﻿
+struct GPUParticle {
+    vec3 position;
+//    float _pad1;        // std430 alignment
+    vec3 velocity;
+    float pressure;
+};
 
-void SmokeSimulation::updateParticles(float deltaTime) {
-    constexpr float maxVelocity = 10.0f;
-    const float cellSize = m_grid.getCellSize();
-    const glm::vec3 boundsMin = m_grid.getMinBounds();
-    const glm::vec3 boundsMax = m_grid.getMaxBounds();
-    const float halfH = m_simulationHeight * 0.5f;
+layout(std430, binding = 0) buffer Particles {
+    GPUParticle particles[];
+};
 
-    const size_t n = m_gasParticles.size();
-    for (size_t i = 0; i < n; ++i) {
-        GasParticle& particle = m_gasParticles[i];
+layout(std430, binding = 1) buffer GridOcc {
+    uint occupancy[];
+};
 
-        float buoyancyForce = (m_ambientPressure - particle.pressure) * 0.001f;
-        particle.velocity.y += (m_gravity + buoyancyForce) * deltaTime;
+const uint OCCUPANCY_EMPTY = 0xFFFFFFFFu;
 
-        float speed = glm::length(particle.velocity);
-        if (speed > maxVelocity)
-            particle.velocity = glm::normalize(particle.velocity) * maxVelocity;
+layout(std140, binding = 2) uniform SimParams {
+    float deltaTime;
+    float gravity;
+    float ambientPressure;
+    float dampingFactor;
 
-        const glm::vec3 newPosition = particle.position + particle.velocity * deltaTime;
+    float simulationHeight;
+    float cellSize;
+    float maxVelocity;
+    uint  totalCells;
 
-        if (m_grid.isValidWorldPosition(newPosition)) {
-            const glm::ivec3 newGridPos = m_grid.worldToGrid(newPosition);
-            const int newKey = gridPosToKey(newGridPos);
-            const size_t occ = (newKey >= 0 && newKey < m_totalCells) ? m_gridOccupancyFlat[newKey] : OCCUPANCY_EMPTY;
+    vec3 boundsMin;
+    float _pad0;
 
-            const glm::ivec3 oldGridPos = m_grid.worldToGrid(particle.position);
-            const int oldKey = gridPosToKey(oldGridPos);
+    vec3 boundsMax;
+    float _pad1;
+};
 
-            if (occ == OCCUPANCY_EMPTY || occ == i || newKey == oldKey) {
-                const glm::vec3 cellCenter = m_grid.gridToWorld(newGridPos);
-                const float distToCenter = glm::length(newPosition - cellCenter);
-                if (newKey == oldKey || distToCenter < cellSize * 0.4f)
-                    particle.position = newPosition;
-                else
-                    particle.position = cellCenter;
-            } else {
-                const glm::ivec3 freeNeighbor = findFreeNeighborCell(oldGridPos, particle.velocity);
-                if (freeNeighbor != oldGridPos && m_grid.isValidPosition(freeNeighbor)) {
-                    particle.position = m_grid.gridToWorld(freeNeighbor);
-                    particle.velocity.x *= 0.7f;
-                    particle.velocity.z *= 0.7f;
-                } else {
-                    particle.velocity.x = 0.0f;
-                    particle.velocity.z = 0.0f;
-                    particle.position = m_grid.gridToWorld(oldGridPos);
-                }
-            }
+uint gridPosToKey(ivec3 p, ivec3 gridSize) {
+    return uint(p.x + p.y * gridSize.x + p.z * gridSize.x * gridSize.y);
+}
+
+ivec3 worldToGrid(vec3 pos) {
+    return ivec3(floor((pos - boundsMin) / cellSize));
+}
+
+void main() {
+    
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= particles.length())
+        return;
+    GPUParticle particle = particles[i];
+    float buoyancyForce = (ambientPressure - particle.pressure) * 0.001;
+    particle.velocity.y += (gravity + buoyancyForce) * deltaTime;
+    
+    float speed = length(particle.velocity);
+    if (speed > maxVelocity)
+        particle.velocity = normalize(particle.velocity) * maxVelocity;
+    
+    vec3 newPosition = particle.position + particle.velocity * deltaTime;
+    if (all(greaterThanEqual(newPosition, boundsMin)) && all(lessThanEqual(newPosition, boundsMax))) {
+        ivec3 newGridPos = worldToGrid(newPosition);
+        uint newKey = gridPosToKey(newGridPos, ivec3((boundsMax - boundsMin) / cellSize));
+        uint occ = (newKey < totalCells) ? occupancy[newKey] : OCCUPANCY_EMPTY;
+        
+        ivec3 oldGridPos = worldToGrid(particle.position);
+        uint oldKey = gridPosToKey(oldGridPos, ivec3((boundsMax - boundsMin) / cellSize));
+        
+        if (occ == OCCUPANCY_EMPTY || occ == i || newKey == oldKey) {
+            vec3 cellCenter = boundsMin + (vec3(newGridPos) + vec3(0.5)) * cellSize;
+            float distToCenter = length(newPosition - cellCenter);
+            if (newKey == oldKey || distToCenter < cellSize * 0.4)
+                particle.position = newPosition;
+            else
+                particle.position = cellCenter;
         } else {
-            if (newPosition.x < boundsMin.x || newPosition.x > boundsMax.x) {
-                particle.velocity.x *= -0.5f;
-                particle.position.x = std::clamp(particle.position.x, boundsMin.x, boundsMax.x);
-            }
-            if (newPosition.y < boundsMin.y || newPosition.y > boundsMax.y) {
-                particle.velocity.y = 0.0f;
-                particle.position.y = std::clamp(particle.position.y, boundsMin.y, boundsMax.y);
-            }
-            if (newPosition.z < boundsMin.z || newPosition.z > boundsMax.z) {
-                particle.velocity.z *= -0.5f;
-                particle.position.z = std::clamp(particle.position.z, boundsMin.z, boundsMax.z);
-            }
+            particle.velocity.x *= 0.7;
+            particle.velocity.z *= 0.7;
+            particle.position = boundsMin + (vec3(oldGridPos) + vec3(0.5)) * cellSize;
         }
-
-        particle.velocity *= m_dampingFactor;
-        const float heightFactor = (particle.position.y + halfH) / static_cast<float>(m_simulationHeight);
-        particle.pressure = m_ambientPressure * (1.0f - heightFactor * 0.1f);
+    } else {
+        if (newPosition.x < boundsMin.x || newPosition.x > boundsMax.x) {
+            particle.velocity.x *= -0.5;
+            particle.position.x = clamp(particle.position.x, boundsMin.x, boundsMax.x);
+        }
+        if (newPosition.y < boundsMin.y || newPosition.y > boundsMax.y) {
+            particle.velocity.y = 0.0;
+            particle.position.y = clamp(particle.position.y, boundsMin.y, boundsMax.y);
+        }
+        if (newPosition.z < boundsMin.z || newPosition.z > boundsMax.z) {
+            particle.velocity.z *= -0.5;
+            particle.position.z = clamp(particle.position.z, boundsMin.z, boundsMax.z);
+        }
     }
+    particle.velocity *= dampingFactor;
+    float heightFactor = particle.position.y / simulationHeight + 0.5;
+    particle.pressure = ambientPressure * (1.0 - heightFactor * 0.1);
+    particles[i] = particle;
 }

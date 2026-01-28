@@ -115,7 +115,9 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /I "$(SolutionDir)x64\Debug\ImGui.lib" "$(SolutionDir)lib\imgui\" </Command>
+      <!-- Copy the *current config* ImGui.lib to SolutionDir\lib\imgui.
+           Using $(TargetPath) prevents Debug/Release mix (LNK2038). -->
+      <Command>if not exist "$(SolutionDir)lib\imgui" mkdir "$(SolutionDir)lib\imgui" &amp; xcopy /Y "$(TargetPath)" "$(SolutionDir)lib\imgui\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -155,6 +157,10 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
+    <PostBuildEvent>
+      <!-- Keep lib\imgui in sync for Release as well -->
+      <Command>if not exist "$(SolutionDir)lib\imgui" mkdir "$(SolutionDir)lib\imgui" &amp; xcopy /Y "$(TargetPath)" "$(SolutionDir)lib\imgui\"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ImGui.cpp" />

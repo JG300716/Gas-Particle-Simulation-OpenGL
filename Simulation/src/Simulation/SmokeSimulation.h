@@ -4,8 +4,8 @@
 #include "Grid.h"
 #include <vector>
 #include <glm/glm.hpp>
-#include <vector>
 #include <basetsd.h>
+#include <glad/glad.h>
 
 // Przeszkoda (ściana) - w 3D
 struct Obstacle {
@@ -29,20 +29,23 @@ public:
     
     // Parametry symulacji
     float getAmbientPressure() const { return m_ambientPressure; }
-    void setAmbientPressure(float pressure) { m_ambientPressure = pressure; }
+    void setAmbientPressure(const float &pressure) { m_ambientPressure = pressure; }
     
     float getParticleDensity() const { return m_particleDensity; }
-    void setParticleDensity(float density) { m_particleDensity = density; }
+    void setParticleDensity(const float &density) { m_particleDensity = density; }
     
     float getGravity() const { return m_gravity; }
-    void setGravity(float gravity) { m_gravity = gravity; }
+    void setGravity(const float &gravity) { m_gravity = gravity; }
 
     float getDampingFactor() const { return m_dampingFactor; }
-    void setDampingFactor(float factor) { m_dampingFactor = factor; }
+    void setDampingFactor(const float &factor) { m_dampingFactor = factor; }
+
+    float getCellSize() const { return m_cellSize; }
+    void setCellSize(const float &size) { m_cellSize = std::max(0.01f, size); }
     
     // Time scale
     float getTimeScale() const { return m_timeScale; }
-    void setTimeScale(float timeScale) { m_timeScale = std::max(0.0f, timeScale); }
+    void setTimeScale(const float &timeScale) { m_timeScale = std::max(0.0f, timeScale); }
     
     // Grid size
     void setGridSize(int sizeX, int sizeY, int sizeZ);
@@ -84,6 +87,7 @@ private:
     float m_gravity;               // Grawitacja [m/s^2]
     float m_timeScale;             // Modyfikator czasu (0.0 = zatrzymane, 1.0 = normalna prędkość, >1.0 = przyspieszone)
     float m_dampingFactor;        // Tłumienie prędkości cząsteczek
+    float m_cellSize{ 1.0f };          // Rozmiar komórki grid'a
     
     int m_simulationWidth;
     int m_simulationHeight;
@@ -109,4 +113,16 @@ private:
     void generateInitialParticles();
 
     void updateGridStrides();
+
+    // GPU compute shader
+    GLuint m_computeProgram{ 0 };
+    GLuint m_particleSSBO{ 0 };
+    GLuint m_occupancySSBO{ 0 };
+    GLuint m_paramsUBO{ 0 };
+    bool m_useGPU{ true };
+
+    bool initComputeBuffers();
+    void updateComputeBuffers();
+    void updateParticlesGPU(float deltaTime);
+    void cleanupComputeBuffers();
 };

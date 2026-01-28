@@ -14,9 +14,33 @@ struct GasParticle {
     glm::vec3 velocity;      // Prędkość [m/s]
     float density;            // Gęstość [g/cm^3]
     float pressure;           // Ciśnienie [hPa]
-    float temperature;        // Temperatura [K] (opcjonalnie)
     float size;               // Rozmiar cząsteczki do renderowania
     bool toErase;
+};
+
+struct GPUParticle {
+    glm::vec3 position;
+    //    float _pad1;        // std430 alignment
+    glm::vec3 velocity;
+    float pressure;
+};
+
+struct SimParamsGPU {
+    float deltaTime;
+    float gravity;
+    float ambientPressure;
+    float dampingFactor;
+
+    float simulationHeight;
+    float cellSize;
+    float maxVelocity;
+    uint32_t totalCells;
+
+    glm::vec3 boundsMin;
+    float pad0;
+
+    glm::vec3 boundsMax;
+    float pad1;
 };
 
 class Renderer {
@@ -69,4 +93,6 @@ private:
     void initObstacleBuffers();
     // Inicjalizuje VAO/VBO dla grid'a
     void initGridBuffers();
+
+    GLuint createComputeProgram(const char* compPath);
 };

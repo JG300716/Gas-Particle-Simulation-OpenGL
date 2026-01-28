@@ -3,6 +3,9 @@
 #include <random>
 #include <iterator>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
 
 SmokeSimulation::SmokeSimulation() 
     : m_grid(40, 40, 40, 1.0f),
@@ -10,6 +13,7 @@ SmokeSimulation::SmokeSimulation()
       m_particleDensity(0.001225f),  // Domyślna gęstość powietrza [g/cm^3] = 1.225 kg/m^3
       m_gravity(-9.81f),              // Domyślna grawitacja [m/s^2]
       m_dampingFactor(0.95f),
+      m_cellSize(1.0f),
       m_timeScale(1.0f),              // Domyślny modyfikator czasu (normalna prędkość)
       m_simulationWidth(40),
       m_simulationHeight(40),
@@ -47,18 +51,21 @@ void SmokeSimulation::setGridSize(int sizeX, int sizeY, int sizeZ) {
             }),
         m_gasParticles.end()
     );
-
+    
     m_grid = Grid(sizeX, sizeY, sizeZ, m_grid.getCellSize());
     m_simulationWidth = sizeX;
     m_simulationHeight = sizeY;
     m_simulationDepth = sizeZ;
     updateGridStrides();
     updateGridOccupancy();
+    
+    if (m_useGPU && m_computeProgram != 0) {
+        updateComputeBuffers();
+    }
 }
 
 void SmokeSimulation::generateInitialParticles() {
     m_gasParticles.clear();
-    const float cellSize = m_grid.getCellSize();
     const int maxParticles = std::min(80000, m_totalCells);
     m_gasParticles.reserve(static_cast<size_t>(maxParticles));
 
@@ -81,8 +88,7 @@ void SmokeSimulation::generateInitialParticles() {
                 p.velocity = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
                 p.density = m_particleDensity;
                 p.pressure = m_ambientPressure;
-                p.temperature = 293.15f;
-                p.size = cellSize;
+                p.size = m_cellSize; // Skalowanie 10x dla widoczności
                 m_gasParticles.push_back(p);
                 ++added;
             }
@@ -97,11 +103,21 @@ void SmokeSimulation::run(float deltaTime) {
     if (m_timeScale <= 0.0f) {
         return;
     }
-    
-    updateParticles(scaledDeltaTime);
-    //applyParticleInteractions();
-    checkCollisions();
+
+    // Aktualizuj occupancy przed GPU update (compute shader potrzebuje aktualnych danych)
     updateGridOccupancy();
+
+    if (m_useGPU && m_computeProgram != 0) {
+        updateParticlesGPU(scaledDeltaTime);
+    } else {
+        updateParticles(scaledDeltaTime);
+    }
+    
+    //applyParticleInteractions();
+    //checkCollisions();
+    
+    // Aktualizuj occupancy po aktualizacji pozycji cząsteczek
+    //updateGridOccupancy();
 }
 
 void SmokeSimulation::updateParticles(float deltaTime) {
@@ -270,10 +286,8 @@ void SmokeSimulation::addParticlesAt(const glm::vec3& position, int count) {
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> velDist(-1.0f, 1.0f);
     
-    glm::ivec3 centerGridPos = m_grid.worldToGrid(position);
+    const glm::ivec3 centerGridPos = m_grid.worldToGrid(position);
 
-
-    const float cellSize = m_grid.getCellSize();
     int added = 0;
     for (int offset = 0; offset < 10 && added < count; ++offset) {
         for (int dx = -offset; dx <= offset && added < count; ++dx) {
@@ -287,8 +301,7 @@ void SmokeSimulation::addParticlesAt(const glm::vec3& position, int count) {
                         particle.velocity = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
                         particle.density = m_particleDensity;
                         particle.pressure = m_ambientPressure;
-                        particle.temperature = 293.15f;
-                        particle.size = cellSize * 5.f;
+                        particle.size = m_cellSize; // Skalowanie 10x dla widoczności
                         m_gasParticles.push_back(particle);
                         added++;
                     }
@@ -298,6 +311,10 @@ void SmokeSimulation::addParticlesAt(const glm::vec3& position, int count) {
     }
     
     updateGridOccupancy();
+    
+    if (m_useGPU && m_computeProgram != 0) {
+        updateComputeBuffers();
+    }
 }
 
 void SmokeSimulation::spawnParticles(int count) {
@@ -344,12 +361,10 @@ glm::ivec3 SmokeSimulation::findFreeNeighborCell(const glm::ivec3& gridPos, cons
             return candidate;
         }
     }
-    const float cellSize = m_grid.getCellSize();
-    const float cellJump = cellSize / 10;
     const int dy = direction.y;
-    for (float dx = -cellSize; dx <= cellSize; dx+=cellJump) {
-        for (float dz = -cellSize; dz <= cellSize; dz+=cellJump) {
-            if (dx == 0.f && dz == 0.f) continue;
+    for (int dx = -1; dx <= 1; ++dx) {
+        for (int dz = -1; dz <= 1; ++dz) {
+            if (dx == 0 && dz == 0) continue;
             
             const glm::ivec3 neighbor = gridPos + glm::ivec3(dx, dy, dz);
             if (canPlaceParticleAt(neighbor)) {
@@ -380,7 +395,7 @@ void SmokeSimulation::updateGridOccupancy() {
 
     if (toRemove.empty()) return;
 
-    std::ranges::sort(toRemove.begin(), toRemove.end(), [](const size_t &a, const size_t &b) { return a > b; });
+    std::sort(toRemove.begin(), toRemove.end(), [](const size_t &a, const size_t &b) { return a > b; });
     for (const size_t &idx : toRemove) {
         std::swap(m_gasParticles[idx], m_gasParticles.back());
         m_gasParticles.pop_back();
@@ -389,6 +404,7 @@ void SmokeSimulation::updateGridOccupancy() {
     m_gridOccupancyFlat.assign(static_cast<size_t>(m_totalCells), OCCUPANCY_EMPTY);
     for (size_t i = 0; i < m_gasParticles.size(); ++i) {
         const glm::ivec3 gp = m_grid.worldToGrid(m_gasParticles[i].position);
+        m_gasParticles[i].size = m_cellSize;
         if (!m_grid.isValidPosition(gp)) continue;
         const int key = gridPosToKey(gp);
         if (key >= 0 && key < m_totalCells)
@@ -403,7 +419,8 @@ void SmokeSimulation::updateGridStrides() {
     m_totalCells = sx * sy * sz;
 }
 
-void SmokeSimulation::applyParticleInteractions() {
+void SmokeSimulation::applyParticleInteractions()
+{
     // Sprawdź czy cząsteczki są w sąsiednich komórkach grid'a
     for (size_t i = 0; i < m_gasParticles.size(); ++i) {
         auto& particle1 = m_gasParticles[i];
@@ -456,3 +473,230 @@ void SmokeSimulation::applyParticleInteractions() {
         }
     }
 }
+
+bool SmokeSimulation::initComputeBuffers() {
+    // Znajdź ścieżkę do shaderów
+    std::filesystem::path exePath = std::filesystem::current_path();
+    std::filesystem::path shaderDir = exePath / "shaders";
+    
+    if (!std::filesystem::exists(shaderDir)) {
+        std::filesystem::path possiblePaths[] = {
+            exePath.parent_path().parent_path() / "Simulation" / "shaders",
+            exePath / ".." / ".." / "Simulation" / "shaders",
+            exePath / ".." / "Simulation" / "shaders",
+            exePath.parent_path() / "shaders"
+        };
+        
+        for (const auto& path : possiblePaths) {
+            try {
+                if (std::filesystem::exists(path)) {
+                    shaderDir = std::filesystem::canonical(path);
+                    break;
+                }
+            } catch (...) {}
+        }
+    }
+    
+    std::string compPath = (shaderDir / "UpdateParticle.comp").string();
+    
+    // Załaduj compute shader
+    std::ifstream file(compPath);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open compute shader: " << compPath << std::endl;
+        return false;
+    }
+    
+    std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.close();
+    
+    const char* src = source.c_str();
+    GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+    glShaderSource(shader, 1, &src, nullptr);
+    glCompileShader(shader);
+    
+    GLint success;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char log[2048];
+        glGetShaderInfoLog(shader, 2048, nullptr, log);
+        std::cerr << "Compute shader compilation failed: " << log << std::endl;
+        glDeleteShader(shader);
+        return false;
+    }
+    
+    m_computeProgram = glCreateProgram();
+    glAttachShader(m_computeProgram, shader);
+    glLinkProgram(m_computeProgram);
+    
+    glGetProgramiv(m_computeProgram, GL_LINK_STATUS, &success);
+    if (!success) {
+        char log[2048];
+        glGetProgramInfoLog(m_computeProgram, 2048, nullptr, log);
+        std::cerr << "Compute shader linking failed: " << log << std::endl;
+        glDeleteShader(shader);
+        glDeleteProgram(m_computeProgram);
+        m_computeProgram = 0;
+        return false;
+    }
+    
+    glDeleteShader(shader);
+    
+    // Utwórz buffery
+    glGenBuffers(1, &m_particleSSBO);
+    glGenBuffers(1, &m_occupancySSBO);
+    glGenBuffers(1, &m_paramsUBO);
+    
+    updateComputeBuffers();
+    
+    return true;
+}
+
+void SmokeSimulation::updateComputeBuffers() {
+    if (!m_useGPU || m_computeProgram == 0) return;
+    
+    // Aktualizuj SSBO cząsteczek
+    std::vector<GPUParticle> gpuParticles;
+    gpuParticles.reserve(m_gasParticles.size());
+    for (const auto& p : m_gasParticles) {
+        GPUParticle gp;
+        gp.position = p.position;
+        gp.velocity = p.velocity;
+        gp.pressure = p.pressure;
+        gpuParticles.push_back(gp);
+    }
+    
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_particleSSBO);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, gpuParticles.size() * sizeof(GPUParticle), 
+                 gpuParticles.data(), GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_particleSSBO);
+    
+    // Aktualizuj SSBO occupancy (konwertuj size_t na uint32_t)
+    std::vector<uint32_t> occupancyUint(m_gridOccupancyFlat.size());
+    for (size_t i = 0; i < m_gridOccupancyFlat.size(); ++i) {
+        occupancyUint[i] = (m_gridOccupancyFlat[i] == OCCUPANCY_EMPTY) ? 0xFFFFFFFFu : static_cast<uint32_t>(m_gridOccupancyFlat[i]);
+    }
+    
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_occupancySSBO);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, occupancyUint.size() * sizeof(uint32_t), 
+                 occupancyUint.data(), GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_occupancySSBO);
+    
+    // Aktualizuj UBO parametrów
+    SimParamsGPU params;
+    params.deltaTime = 0.0f;
+    params.gravity = m_gravity;
+    params.ambientPressure = m_ambientPressure;
+    params.dampingFactor = m_dampingFactor;
+    params.simulationHeight = static_cast<float>(m_simulationHeight);
+    params.cellSize = m_grid.getCellSize();
+    params.maxVelocity = 10.0f;
+    params.totalCells = static_cast<uint32_t>(m_totalCells);
+    params.boundsMin = m_grid.getMinBounds();
+    params.pad0 = 0.0f;
+    params.boundsMax = m_grid.getMaxBounds();
+    params.pad1 = 0.0f;
+    
+    glBindBuffer(GL_UNIFORM_BUFFER, m_paramsUBO);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(SimParamsGPU), &params, GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 2, m_paramsUBO);
+    
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+}
+
+void SmokeSimulation::updateParticlesGPU(float deltaTime) {
+    if (!m_useGPU || m_computeProgram == 0) return;
+    
+    // Aktualizuj SSBO cząsteczek z aktualnymi danymi z CPU
+    std::vector<GPUParticle> gpuParticles;
+    gpuParticles.reserve(m_gasParticles.size());
+    for (const auto& p : m_gasParticles) {
+        GPUParticle gp;
+        gp.position = p.position;
+        gp.velocity = p.velocity;
+        gp.pressure = p.pressure;
+        gpuParticles.push_back(gp);
+    }
+    
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_particleSSBO);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, gpuParticles.size() * sizeof(GPUParticle), 
+                 gpuParticles.data(), GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_particleSSBO);
+    
+    // Aktualizuj SSBO occupancy
+    std::vector<uint32_t> occupancyUint(m_gridOccupancyFlat.size());
+    for (size_t i = 0; i < m_gridOccupancyFlat.size(); ++i) {
+        occupancyUint[i] = (m_gridOccupancyFlat[i] == OCCUPANCY_EMPTY) ? 0xFFFFFFFFu : static_cast<uint32_t>(m_gridOccupancyFlat[i]);
+    }
+    
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_occupancySSBO);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, occupancyUint.size() * sizeof(uint32_t), occupancyUint.data());
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_occupancySSBO);
+    
+    // Aktualizuj parametry (deltaTime i inne)
+    SimParamsGPU params;
+    params.deltaTime = deltaTime;
+    params.gravity = m_gravity;
+    params.ambientPressure = m_ambientPressure;
+    params.dampingFactor = m_dampingFactor;
+    params.simulationHeight = static_cast<float>(m_simulationHeight);
+    params.cellSize = m_grid.getCellSize();
+    params.maxVelocity = 10.0f;
+    params.totalCells = static_cast<uint32_t>(m_totalCells);
+    params.boundsMin = m_grid.getMinBounds();
+    params.pad0 = 0.0f;
+    params.boundsMax = m_grid.getMaxBounds();
+    params.pad1 = 0.0f;
+    
+    glBindBuffer(GL_UNIFORM_BUFFER, m_paramsUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(SimParamsGPU), &params);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 2, m_paramsUBO);
+    
+    // Wywołaj compute shader
+    glUseProgram(m_computeProgram);
+    
+    const GLuint numGroups = m_gasParticles.empty() ? 0 : (static_cast<GLuint>(m_gasParticles.size()) + 63) / 64; // 64 work items per group
+    if (numGroups > 0) {
+        glDispatchCompute(numGroups, 1, 1);
+    }
+    
+    // Synchronizuj
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    
+    // Pobierz wyniki z GPU
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_particleSSBO);
+    GPUParticle* gpuData = static_cast<GPUParticle*>(glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY));
+    
+    if (gpuData) {
+        for (size_t i = 0; i < m_gasParticles.size(); ++i) {
+            m_gasParticles[i].position = gpuData[i].position;
+            m_gasParticles[i].velocity = gpuData[i].velocity;
+            m_gasParticles[i].pressure = gpuData[i].pressure;
+        }
+        glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+    }
+    
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    glUseProgram(0);
+}
+
+void SmokeSimulation::cleanupComputeBuffers() {
+    if (m_particleSSBO != 0) {
+        glDeleteBuffers(1, &m_particleSSBO);
+        m_particleSSBO = 0;
+    }
+    if (m_occupancySSBO != 0) {
+        glDeleteBuffers(1, &m_occupancySSBO);
+        m_occupancySSBO = 0;
+    }
+    if (m_paramsUBO != 0) {
+        glDeleteBuffers(1, &m_paramsUBO);
+        m_paramsUBO = 0;
+    }
+    if (m_computeProgram != 0) {
+        glDeleteProgram(m_computeProgram);
+        m_computeProgram = 0;
+    }
+}
+

@@ -2,6 +2,9 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
+      <FullPath>J:\Files\Mgr\I_Rok\II\PWAG\x64\Release\PWAG_Tests.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
       <FullPath>J:\Files\Mgr\I_Rok\II\PWAG\x64\Release\Simulation.exe</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
