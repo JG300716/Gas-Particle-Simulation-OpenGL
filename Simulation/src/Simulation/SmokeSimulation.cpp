@@ -1,5 +1,6 @@
 #include "SmokeSimulation.h"
 #include <algorithm>
+#include <cmath>
 #include <random>
 #include <iterator>
 #include <cstddef>
@@ -18,7 +19,7 @@ SmokeSimulation::SmokeSimulation()
       m_simulationWidth(40),
       m_simulationHeight(40),
       m_simulationDepth(40),
-      m_spawnerPosition(0.0f, 0.0f, 0.0f) {
+      m_spawnerPosition(0.0f, -50.0f, 0.0f) {
 }
 
 SmokeSimulation::~SmokeSimulation() {
@@ -37,8 +38,12 @@ bool SmokeSimulation::initialize(const UINT32& simulationWidth, const UINT32& si
 
     m_gridOccupancyFlat.assign(static_cast<size_t>(m_totalCells), OCCUPANCY_EMPTY);
     generateInitialParticles();
+    initComputeBuffers();
     updateGridOccupancy();
 
+    std::cout<< " GPU: " << (m_useGPU ? "Enabled" : "Disabled") << std::endl;
+    std::cout<<"Compute Shader Program ID: " << m_computeProgram << std::endl;
+    
     return true;
 }
 
@@ -51,7 +56,7 @@ void SmokeSimulation::setGridSize(int sizeX, int sizeY, int sizeZ) {
             }),
         m_gasParticles.end()
     );
-    
+
     m_grid = Grid(sizeX, sizeY, sizeZ, m_grid.getCellSize());
     m_simulationWidth = sizeX;
     m_simulationHeight = sizeY;
@@ -66,7 +71,8 @@ void SmokeSimulation::setGridSize(int sizeX, int sizeY, int sizeZ) {
 
 void SmokeSimulation::generateInitialParticles() {
     m_gasParticles.clear();
-    const int maxParticles = std::min(80000, m_totalCells);
+    const float cellSize = m_grid.getCellSize();
+    const int maxParticles = std::min(8000, m_totalCells);
     m_gasParticles.reserve(static_cast<size_t>(maxParticles));
 
     std::random_device rd;
@@ -88,7 +94,7 @@ void SmokeSimulation::generateInitialParticles() {
                 p.velocity = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
                 p.density = m_particleDensity;
                 p.pressure = m_ambientPressure;
-                p.size = m_cellSize; // Skalowanie 10x dla widoczności
+                p.size = cellSize;
                 m_gasParticles.push_back(p);
                 ++added;
             }
@@ -104,17 +110,14 @@ void SmokeSimulation::run(float deltaTime) {
         return;
     }
 
-    // Aktualizuj occupancy przed GPU update (compute shader potrzebuje aktualnych danych)
-    updateGridOccupancy();
-
     if (m_useGPU && m_computeProgram != 0) {
         updateParticlesGPU(scaledDeltaTime);
     } else {
-        updateParticles(scaledDeltaTime);
+        //updateParticles(scaledDeltaTime);
+        //applyParticleInteractions();
     }
     
-    //applyParticleInteractions();
-    //checkCollisions();
+    checkCollisions();
     
     // Aktualizuj occupancy po aktualizacji pozycji cząsteczek
     //updateGridOccupancy();
@@ -131,6 +134,9 @@ void SmokeSimulation::updateParticles(float deltaTime) {
     for (size_t i = 0; i < n; ++i) {
         GasParticle& particle = m_gasParticles[i];
 
+        const glm::ivec3 oldGridPos = m_grid.worldToGrid(particle.position);
+        const int oldKey = gridPosToKey(oldGridPos);
+
         float buoyancyForce = (m_ambientPressure - particle.pressure) * 0.001f;
         particle.velocity.y += (m_gravity + buoyancyForce) * deltaTime;
 
@@ -145,9 +151,6 @@ void SmokeSimulation::updateParticles(float deltaTime) {
             const int newKey = gridPosToKey(newGridPos);
             const size_t occ = (newKey >= 0 && newKey < m_totalCells) ? m_gridOccupancyFlat[newKey] : OCCUPANCY_EMPTY;
 
-            const glm::ivec3 oldGridPos = m_grid.worldToGrid(particle.position);
-            const int oldKey = gridPosToKey(oldGridPos);
-
             if (occ == OCCUPANCY_EMPTY || occ == i || newKey == oldKey) {
                 const glm::vec3 cellCenter = m_grid.gridToWorld(newGridPos);
                 const float distToCenter = glm::length(newPosition - cellCenter);
@@ -156,13 +159,25 @@ void SmokeSimulation::updateParticles(float deltaTime) {
                 else
                     particle.position = cellCenter;
             } else {
-                const glm::ivec3 freeNeighbor = findFreeNeighborCell(oldGridPos, particle.velocity);
-                if (freeNeighbor != oldGridPos && m_grid.isValidPosition(freeNeighbor)) {
-                    particle.position = m_grid.gridToWorld(freeNeighbor);
-                    particle.velocity.x *= 0.7f;
-                    particle.velocity.z *= 0.7f;
+                constexpr float vyThreshold = 0.05f;
+                const bool searchNeighbor = std::abs(particle.velocity.y) > vyThreshold;
+                if (searchNeighbor) {
+                    const bool blockedFromBelow = particle.velocity.y < -0.05f;
+                    const glm::ivec3 freeNeighbor = findFreeNeighborCell(oldGridPos, particle.velocity);
+                    if (freeNeighbor != oldGridPos && m_grid.isValidPosition(freeNeighbor)) {
+                        particle.position = m_grid.gridToWorld(freeNeighbor);
+                        particle.velocity.x *= 0.7f;
+                        particle.velocity.z *= 0.7f;
+                        if (blockedFromBelow) particle.velocity.y = 0.0f;
+                    } else {
+                        particle.velocity.x = 0.0f;
+                        particle.velocity.y = 0.0f;
+                        particle.velocity.z = 0.0f;
+                        particle.position = m_grid.gridToWorld(oldGridPos);
+                    }
                 } else {
                     particle.velocity.x = 0.0f;
+                    particle.velocity.y = 0.0f;
                     particle.velocity.z = 0.0f;
                     particle.position = m_grid.gridToWorld(oldGridPos);
                 }
@@ -185,6 +200,14 @@ void SmokeSimulation::updateParticles(float deltaTime) {
         particle.velocity *= m_dampingFactor;
         const float heightFactor = (particle.position.y + halfH) / static_cast<float>(m_simulationHeight);
         particle.pressure = m_ambientPressure * (1.0f - heightFactor * 0.1f);
+
+        const glm::ivec3 finalGridPos = m_grid.worldToGrid(particle.position);
+        const int finalKey = gridPosToKey(finalGridPos);
+        if (oldKey != finalKey && oldKey >= 0 && oldKey < m_totalCells && finalKey >= 0 && finalKey < m_totalCells) {
+            if (m_gridOccupancyFlat[static_cast<size_t>(oldKey)] == i)
+                m_gridOccupancyFlat[static_cast<size_t>(oldKey)] = OCCUPANCY_EMPTY;
+            m_gridOccupancyFlat[static_cast<size_t>(finalKey)] = i;
+        }
     }
 }
 
@@ -287,6 +310,7 @@ void SmokeSimulation::addParticlesAt(const glm::vec3& position, int count) {
     std::uniform_real_distribution<float> velDist(-1.0f, 1.0f);
     
     const glm::ivec3 centerGridPos = m_grid.worldToGrid(position);
+    const float cellSize = m_grid.getCellSize();
 
     int added = 0;
     for (int offset = 0; offset < 10 && added < count; ++offset) {
@@ -301,7 +325,7 @@ void SmokeSimulation::addParticlesAt(const glm::vec3& position, int count) {
                         particle.velocity = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
                         particle.density = m_particleDensity;
                         particle.pressure = m_ambientPressure;
-                        particle.size = m_cellSize; // Skalowanie 10x dla widoczności
+                        particle.size = cellSize;
                         m_gasParticles.push_back(particle);
                         added++;
                     }
@@ -345,34 +369,29 @@ glm::ivec3 SmokeSimulation::findFreeNeighborCell(const glm::ivec3& gridPos, cons
         velocity.y > 0.1f ? 1 : (velocity.y < -0.1f ? -1 : 0),
         velocity.z > 0.1f ? 1 : (velocity.z < -0.1f ? -1 : 0)
     );
-    
+    const int range = 10;
+
     glm::ivec3 candidates[] = {
-        gridPos + direction, // Główny kierunek
-        gridPos + glm::ivec3(direction.x, 0, 0), // Tylko X
-        gridPos + glm::ivec3(0, direction.y, 0), // Tylko Y
-        gridPos + glm::ivec3(0, 0, direction.z), // Tylko Z
-        gridPos + glm::ivec3(direction.x, direction.y, 0), // X+Y
-        gridPos + glm::ivec3(direction.x, 0, direction.z), // X+Z
-        gridPos + glm::ivec3(0, direction.y, direction.z), // Y+Z
+        gridPos + direction,
+        gridPos + glm::ivec3(direction.x, 0, 0),
+        gridPos + glm::ivec3(0, direction.y, 0),
+        gridPos + glm::ivec3(0, 0, direction.z),
+        gridPos + glm::ivec3(direction.x, direction.y, 0),
+        gridPos + glm::ivec3(direction.x, 0, direction.z),
+        gridPos + glm::ivec3(0, direction.y, direction.z),
     };
-    
-    for (const auto& candidate : candidates) {
-        if (canPlaceParticleAt(candidate)) {
-            return candidate;
-        }
+    for (const auto& c : candidates) {
+        if (canPlaceParticleAt(c)) return c;
     }
-    const int dy = direction.y;
-    for (int dx = -1; dx <= 1; ++dx) {
-        for (int dz = -1; dz <= 1; ++dz) {
-            if (dx == 0 && dz == 0) continue;
-            
-            const glm::ivec3 neighbor = gridPos + glm::ivec3(dx, dy, dz);
-            if (canPlaceParticleAt(neighbor)) {
-                return neighbor;
+    for (int dy = -range; dy <= range; ++dy) {
+        for (int dx = -range; dx <= range; ++dx) {
+            for (int dz = -range; dz <= range; ++dz) {
+                if (dx == 0 && dy == 0 && dz == 0) continue;
+                const glm::ivec3 n = gridPos + glm::ivec3(dx, dy, dz);
+                if (canPlaceParticleAt(n)) return n;
             }
         }
     }
-    
     return gridPos;
 }
 
@@ -404,7 +423,6 @@ void SmokeSimulation::updateGridOccupancy() {
     m_gridOccupancyFlat.assign(static_cast<size_t>(m_totalCells), OCCUPANCY_EMPTY);
     for (size_t i = 0; i < m_gasParticles.size(); ++i) {
         const glm::ivec3 gp = m_grid.worldToGrid(m_gasParticles[i].position);
-        m_gasParticles[i].size = m_cellSize;
         if (!m_grid.isValidPosition(gp)) continue;
         const int key = gridPosToKey(gp);
         if (key >= 0 && key < m_totalCells)
@@ -655,7 +673,7 @@ void SmokeSimulation::updateParticlesGPU(float deltaTime) {
     // Wywołaj compute shader
     glUseProgram(m_computeProgram);
     
-    const GLuint numGroups = m_gasParticles.empty() ? 0 : (static_cast<GLuint>(m_gasParticles.size()) + 63) / 64; // 64 work items per group
+    const GLuint numGroups = m_gasParticles.empty() ? 0 : (static_cast<GLuint>(m_gasParticles.size()) + 31) / 32;
     if (numGroups > 0) {
         glDispatchCompute(numGroups, 1, 1);
     }

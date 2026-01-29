@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Shader.h"
+#include "GltfModel.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <vector>
@@ -20,7 +21,7 @@ struct GasParticle {
 
 struct GPUParticle {
     glm::vec3 position;
-    //    float _pad1;        // std430 alignment
+        float _pad1;        // std430 alignment
     glm::vec3 velocity;
     float pressure;
 };
@@ -69,10 +70,18 @@ public:
     // Czyszczenie ekranu
     void clear(float r = 0.1f, float g = 0.1f, float b = 0.1f, float a = 1.0f);
 
+    // Campfire (spawner) – ładowanie i render
+    bool loadCampfire(const std::string& path);
+    void renderCampfire(const glm::vec3& position) const;
+
+    static std::string findCampfirePath();
+    
 private:
     Shader m_particleShader;
     Shader m_obstacleShader;
     Shader m_gridShader;
+    Shader m_modelShader;
+    GltfModel m_campfire;
     
     GLuint m_particleVAO;
     GLuint m_particleVBO;

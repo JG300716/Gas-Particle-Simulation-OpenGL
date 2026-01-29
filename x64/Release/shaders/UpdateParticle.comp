@@ -1,7 +1,10 @@
-﻿
+#version 430 core
+
+layout(local_size_x = 32) in;
+
 struct GPUParticle {
     vec3 position;
-//    float _pad1;        // std430 alignment
+    float _pad1;
     vec3 velocity;
     float pressure;
 };
@@ -11,87 +14,124 @@ layout(std430, binding = 0) buffer Particles {
 };
 
 layout(std430, binding = 1) buffer GridOcc {
-    uint occupancy[];
+    coherent uint occupancy[];
 };
-
-const uint OCCUPANCY_EMPTY = 0xFFFFFFFFu;
 
 layout(std140, binding = 2) uniform SimParams {
     float deltaTime;
     float gravity;
     float ambientPressure;
     float dampingFactor;
-
     float simulationHeight;
     float cellSize;
     float maxVelocity;
     uint  totalCells;
-
     vec3 boundsMin;
     float _pad0;
-
     vec3 boundsMax;
     float _pad1;
 };
 
-uint gridPosToKey(ivec3 p, ivec3 gridSize) {
-    return uint(p.x + p.y * gridSize.x + p.z * gridSize.x * gridSize.y);
+const uint EMPTY = 0xFFFFFFFFu;
+const float VY_THRESHOLD = 0.05;
+
+uint hash(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    return x;
+}
+
+uint gridKey(ivec3 p, ivec3 gs) {
+    return uint(p.x + p.y * gs.x + p.z * gs.x * gs.y);
 }
 
 ivec3 worldToGrid(vec3 pos) {
     return ivec3(floor((pos - boundsMin) / cellSize));
 }
 
+bool tryOccupy(uint key, uint me) {
+    if (key >= totalCells) return false;
+    return atomicCompSwap(occupancy[key], EMPTY, me) == EMPTY;
+}
+
+// Pseudo-random offset based on particle ID - deterministyczny chaos
+ivec2 randomOffset(uint seed, int iteration) {
+    uint h = hash(seed + uint(iteration) * 73856093u);
+    int x = int(h & 3u) - 1;
+    int z = int((h >> 2) & 3u) - 1;
+    return ivec2(x, z);
+}
+
 void main() {
-    
     uint i = gl_GlobalInvocationID.x;
-    if (i >= particles.length())
-        return;
-    GPUParticle particle = particles[i];
-    float buoyancyForce = (ambientPressure - particle.pressure) * 0.001;
-    particle.velocity.y += (gravity + buoyancyForce) * deltaTime;
-    
-    float speed = length(particle.velocity);
+    if (i >= particles.length()) return;
+
+    ivec3 gs = ivec3((boundsMax - boundsMin) / cellSize);
+    GPUParticle p = particles[i];
+
+    float buoyancy = (ambientPressure - p.pressure) * 0.001;
+    p.velocity.y += (gravity + buoyancy) * deltaTime;
+
+    float speed = length(p.velocity);
     if (speed > maxVelocity)
-        particle.velocity = normalize(particle.velocity) * maxVelocity;
-    
-    vec3 newPosition = particle.position + particle.velocity * deltaTime;
-    if (all(greaterThanEqual(newPosition, boundsMin)) && all(lessThanEqual(newPosition, boundsMax))) {
-        ivec3 newGridPos = worldToGrid(newPosition);
-        uint newKey = gridPosToKey(newGridPos, ivec3((boundsMax - boundsMin) / cellSize));
-        uint occ = (newKey < totalCells) ? occupancy[newKey] : OCCUPANCY_EMPTY;
-        
-        ivec3 oldGridPos = worldToGrid(particle.position);
-        uint oldKey = gridPosToKey(oldGridPos, ivec3((boundsMax - boundsMin) / cellSize));
-        
-        if (occ == OCCUPANCY_EMPTY || occ == i || newKey == oldKey) {
-            vec3 cellCenter = boundsMin + (vec3(newGridPos) + vec3(0.5)) * cellSize;
-            float distToCenter = length(newPosition - cellCenter);
-            if (newKey == oldKey || distToCenter < cellSize * 0.4)
-                particle.position = newPosition;
-            else
-                particle.position = cellCenter;
-        } else {
-            particle.velocity.x *= 0.7;
-            particle.velocity.z *= 0.7;
-            particle.position = boundsMin + (vec3(oldGridPos) + vec3(0.5)) * cellSize;
-        }
-    } else {
-        if (newPosition.x < boundsMin.x || newPosition.x > boundsMax.x) {
-            particle.velocity.x *= -0.5;
-            particle.position.x = clamp(particle.position.x, boundsMin.x, boundsMax.x);
-        }
-        if (newPosition.y < boundsMin.y || newPosition.y > boundsMax.y) {
-            particle.velocity.y = 0.0;
-            particle.position.y = clamp(particle.position.y, boundsMin.y, boundsMax.y);
-        }
-        if (newPosition.z < boundsMin.z || newPosition.z > boundsMax.z) {
-            particle.velocity.z *= -0.5;
-            particle.position.z = clamp(particle.position.z, boundsMin.z, boundsMax.z);
+    p.velocity *= maxVelocity / speed;
+
+    vec3 newPos = p.position + p.velocity * deltaTime;
+    ivec3 oldCell = worldToGrid(p.position);
+    uint oldKey = gridKey(oldCell, gs);
+
+    bvec3 oob = lessThan(newPos, boundsMin) || greaterThan(newPos, boundsMax);
+    if (any(oob)) {
+        if (oob.x) { p.velocity.x *= -0.5; newPos.x = clamp(newPos.x, boundsMin.x, boundsMax.x); }
+        if (oob.y) { p.velocity.y = 0.0; newPos.y = clamp(newPos.y, boundsMin.y, boundsMax.y); }
+        if (oob.z) { p.velocity.z *= -0.5; newPos.z = clamp(newPos.z, boundsMin.z, boundsMax.z); }
+    }
+
+    ivec3 newCell = worldToGrid(newPos);
+    uint newKey = gridKey(newCell, gs);
+
+    bool moved = false;
+
+    if (newKey == oldKey) {
+        p.position = newPos;
+        moved = true;
+    }
+    else if (tryOccupy(newKey, i)) {
+        atomicExchange(occupancy[oldKey], EMPTY);
+        p.position = newPos;
+        moved = true;
+    }
+    else {
+        bool isFalling = newCell.y < oldCell.y;
+
+        if (isFalling) {
+            for (int attempt = 0; attempt < 8; ++attempt) {
+                ivec2 offset = randomOffset(i, attempt);
+                ivec3 candidate = ivec3(oldCell.x + offset.x, oldCell.y, oldCell.z + offset.y);
+
+                if (candidate.x < 0 || candidate.x >= gs.x ||
+                candidate.z < 0 || candidate.z >= gs.z) continue;
+
+                uint candKey = gridKey(candidate, gs);
+                if (tryOccupy(candKey, i)) {
+                    atomicExchange(occupancy[oldKey], EMPTY);
+                    p.position = boundsMin + (vec3(candidate) + 0.5) * cellSize;
+                    p.velocity.y = 0.0;
+                    p.velocity.xz *= 0.7;
+                    moved = true;
+                    break;
+                }
+            }
         }
     }
-    particle.velocity *= dampingFactor;
-    float heightFactor = particle.position.y / simulationHeight + 0.5;
-    particle.pressure = ambientPressure * (1.0 - heightFactor * 0.1);
-    particles[i] = particle;
+
+    if (!moved) {
+        p.velocity = vec3(0.0);
+        p.position = boundsMin + (vec3(oldCell) + 0.5) * cellSize;
+    }
+
+    p.velocity *= dampingFactor;
+    p.pressure = ambientPressure * (1.0 - (p.position.y / simulationHeight + 0.5) * 0.1);
+    particles[i] = p;
 }

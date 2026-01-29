@@ -227,6 +227,8 @@ void Application::renderFrame() {
         ));
     }
     m_renderer.renderObstacles(obstaclesForRender);
+
+    m_renderer.renderCampfire(m_simulation.getSpawnerPosition());
     
     // Renderuj kontury grid'a
     m_renderer.renderGridWireframe(m_simulation.getGrid());

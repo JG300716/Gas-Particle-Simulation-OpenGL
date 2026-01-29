@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include "../Simulation/Grid.h"
+#include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <filesystem>
 
@@ -87,10 +88,23 @@ bool Renderer::initialize(int windowWidth, int windowHeight) {
         return false;
     }
 
+    std::string modelVert = shaderPath + "/model.vert";
+    std::string modelFrag = shaderPath + "/model.frag";
+    if (!m_modelShader.loadFromFile(modelVert, modelFrag)) {
+        std::cerr << "Failed to load model shader from: " << modelVert << ", " << modelFrag << std::endl;
+        return false;
+    }
+
     // Inicjalizuj buffery
     initParticleBuffers();
     initObstacleBuffers();
     initGridBuffers();
+
+    std::string campfirePath = findCampfirePath();
+    if (!campfirePath.empty() && loadCampfire(campfirePath))
+        std::cout << "Campfire loaded: " << campfirePath << std::endl;
+    else if (campfirePath.empty())
+        std::cerr << "Campfire not found (add Campfire/campfire.glb next to exe)" << std::endl;
 
     // Macierz projekcji będzie ustawiana przez kamerę
     m_projection = glm::mat4(1.0f);
@@ -272,4 +286,37 @@ GLuint Renderer::createComputeProgram(const char* compPath)
 void Renderer::clear(float r, float g, float b, float a) {
     glClearColor(r, g, b, a);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+std::string Renderer::findCampfirePath() {
+    std::filesystem::path exePath = std::filesystem::current_path();
+    std::filesystem::path bases[] = {
+        exePath,
+        exePath.parent_path(),
+        exePath.parent_path().parent_path(),
+        exePath.parent_path().parent_path().parent_path()
+    };
+    for (const auto& base : bases) {
+        std::filesystem::path p = base / "Campfire" / "campfire.glb";
+        try {
+            if (std::filesystem::exists(p)) return std::filesystem::canonical(p).string();
+        } catch (...) {}
+    }
+    return "";
+}
+
+bool Renderer::loadCampfire(const std::string& path) {
+    return m_campfire.loadFromFile(path);
+}
+
+void Renderer::renderCampfire(const glm::vec3& position) const {
+    if (!m_initialized || !m_campfire.isLoaded()) return;
+    m_modelShader.use();
+    m_modelShader.setMat4("uProjection", m_projection);
+    m_modelShader.setMat4("uView", m_view);
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
+    model = model * glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    model = model * glm::scale(glm::mat4(1.0f), glm::vec3(5.f));
+    m_modelShader.setMat4("uModel", model);
+    m_campfire.draw(&m_modelShader);
 }
