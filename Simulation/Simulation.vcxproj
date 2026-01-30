@@ -74,6 +74,9 @@
     <Import Project="..\PWAG_Common.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <IncludePath>$(ProjectDir);$(IncludePath)</IncludePath>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -144,6 +147,7 @@
     <ClCompile Include="src\Application\Application.cpp" />
     <ClCompile Include="src\Render\Camera.cpp" />
     <ClCompile Include="src\Render\Shader.cpp" />
+    <ClCompile Include="Campfire\tiny_gltf.cc" />
     <ClCompile Include="src\Render\GltfModel.cpp" />
     <ClCompile Include="src\Render\Renderer.cpp" />
     <ClCompile Include="src\Simulation\Grid.cpp" />
@@ -171,18 +175,19 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
-    <None Include="shaders\particle.vert" />
-    <None Include="shaders\particle.frag" />
     <None Include="shaders\obstacle.vert" />
     <None Include="shaders\obstacle.frag" />
     <None Include="shaders\grid.vert" />
     <None Include="shaders\grid.frag" />
     <None Include="shaders\model.vert" />
     <None Include="shaders\model.frag" />
-  </ItemGroup>
-  <ItemGroup>
-    <Content Include="shaders\UpdateParticleNeighbor.comp" />
-    <Content Include="shaders\UpdateParticle.comp" />
+    <None Include="shaders\smoke_raymarch.vert" />
+    <None Include="shaders\smoke_raymarch.frag" />
+    <None Include="Campfire\campfire.glb" />
+    <None Include="Campfire\json.hpp" />
+    <None Include="Campfire\stb_image.h" />
+    <None Include="Campfire\stb_image_write.h" />
+    <None Include="Campfire\tiny_gltf.h" />
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <PostBuildEvent>

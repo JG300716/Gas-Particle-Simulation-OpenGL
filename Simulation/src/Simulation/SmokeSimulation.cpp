@@ -1,720 +1,436 @@
 #include "SmokeSimulation.h"
 #include <algorithm>
 #include <cmath>
-#include <random>
-#include <iterator>
-#include <cstddef>
-#include <filesystem>
-#include <fstream>
+#include <cstring>
 #include <iostream>
+#include <sstream>
 
-SmokeSimulation::SmokeSimulation() 
+namespace {
+    unsigned s_dbgFrames = 0;
+    constexpr unsigned DBG_LOG_INTERVAL = 60;
+    glm::ivec3 s_dbgInjectSp(-1, -1, -1);
+
+    void dbgLog(const char* tag, const std::string& msg) {
+        std::cerr << "[SMOKE_DBG][" << tag << "] " << msg << std::endl;
+    }
+}
+
+SmokeSimulation::SmokeSimulation()
     : m_grid(40, 40, 40, 1.0f),
-      m_ambientPressure(1013.25f),  // Domyślne ciśnienie atmosferyczne [hPa]
-      m_particleDensity(0.001225f),  // Domyślna gęstość powietrza [g/cm^3] = 1.225 kg/m^3
-      m_gravity(-9.81f),              // Domyślna grawitacja [m/s^2]
-      m_dampingFactor(0.95f),
-      m_cellSize(1.0f),
-      m_timeScale(1.0f),              // Domyślny modyfikator czasu (normalna prędkość)
-      m_simulationWidth(40),
-      m_simulationHeight(40),
-      m_simulationDepth(40),
-      m_spawnerPosition(0.0f, -50.0f, 0.0f) {
-}
+      m_spawnerPosition(0.f, 0.f, 0.f) {}
 
-SmokeSimulation::~SmokeSimulation() {
-}
+SmokeSimulation::~SmokeSimulation() = default;
 
-bool SmokeSimulation::initialize(const UINT32& simulationWidth, const UINT32& simulationHeight, const UINT32& simulationDepth, const float& cellSize) {
-    m_simulationWidth = static_cast<int>(simulationWidth);
-    m_simulationHeight = static_cast<int>(simulationHeight);
-    m_simulationDepth = static_cast<int>(simulationDepth);
-
-    int gridX = static_cast<int>(simulationWidth);
-    int gridY = static_cast<int>(simulationHeight);
-    int gridZ = static_cast<int>(simulationDepth);
-    m_grid = Grid(gridX, gridY, gridZ, cellSize);
-    updateGridStrides();
-
-    m_gridOccupancyFlat.assign(static_cast<size_t>(m_totalCells), OCCUPANCY_EMPTY);
-    generateInitialParticles();
-    initComputeBuffers();
-    updateGridOccupancy();
-
-    std::cout<< " GPU: " << (m_useGPU ? "Enabled" : "Disabled") << std::endl;
-    std::cout<<"Compute Shader Program ID: " << m_computeProgram << std::endl;
-    
+bool SmokeSimulation::initialize(const UINT32& simulationWidth, const UINT32& simulationHeight,
+                                 const UINT32& simulationDepth, const float& cellSize) {
+    m_nx = static_cast<int>(simulationWidth);
+    m_ny = static_cast<int>(simulationHeight);
+    m_nz = static_cast<int>(simulationDepth);
+    m_cellSize = cellSize;
+    m_grid = Grid(m_nx, m_ny, m_nz, m_cellSize);
+    allocFluid();
+    buildSolidMask();
+    glm::vec3 mn = m_grid.getMinBounds(), mx = m_grid.getMaxBounds();
+    std::ostringstream os;
+    os << "grid " << m_nx << "x" << m_ny << "x" << m_nz << " cellSize=" << m_cellSize
+       << " bounds [" << mn.x << "," << mn.y << "," << mn.z << "]..[" << mx.x << "," << mx.y << "," << mx.z << "]";
+    dbgLog("INIT", os.str());
     return true;
 }
 
 void SmokeSimulation::setGridSize(int sizeX, int sizeY, int sizeZ) {
-    m_gasParticles.erase(
-        std::remove_if(m_gasParticles.begin(), m_gasParticles.end(),
-            [this, sizeX, sizeY, sizeZ](const GasParticle& p) {
-                glm::ivec3 gp = m_grid.worldToGrid(p.position);
-                return gp.x >= sizeX || gp.y >= sizeY || gp.z >= sizeZ || gp.x < 0 || gp.y < 0 || gp.z < 0;
-            }),
-        m_gasParticles.end()
-    );
-
-    m_grid = Grid(sizeX, sizeY, sizeZ, m_grid.getCellSize());
-    m_simulationWidth = sizeX;
-    m_simulationHeight = sizeY;
-    m_simulationDepth = sizeZ;
-    updateGridStrides();
-    updateGridOccupancy();
-    
-    if (m_useGPU && m_computeProgram != 0) {
-        updateComputeBuffers();
-    }
+    m_nx = std::max(1, sizeX);
+    m_ny = std::max(1, sizeY);
+    m_nz = std::max(1, sizeZ);
+    m_grid = Grid(m_nx, m_ny, m_nz, m_grid.getCellSize());
+    allocFluid();
+    buildSolidMask();
 }
 
-void SmokeSimulation::generateInitialParticles() {
-    m_gasParticles.clear();
-    const float cellSize = m_grid.getCellSize();
-    const int maxParticles = std::min(8000, m_totalCells);
-    m_gasParticles.reserve(static_cast<size_t>(maxParticles));
-
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> velDist(-0.5f, 0.5f);
-    std::uniform_real_distribution<float> chanceDist(0.0f, 1.0f);
-    const float fillChance = std::min(1.0f, maxParticles * 1.5f / static_cast<float>(m_totalCells));
-
-    int added = 0;
-    const int sx = m_grid.getSizeX(), sy = m_grid.getSizeY(), sz = m_grid.getSizeZ();
-    for (int x = 0; x < sx && added < maxParticles; ++x) {
-        for (int y = 0; y < sy && added < maxParticles; ++y) {
-            for (int z = 0; z < sz && added < maxParticles; ++z) {
-                if (chanceDist(gen) <= (1.0f - fillChance)) continue;
-                glm::ivec3 gridPos(x, y, z);
-                if (!canPlaceParticleAt(gridPos)) continue;
-                GasParticle p;
-                p.position = m_grid.gridToWorld(gridPos);
-                p.velocity = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
-                p.density = m_particleDensity;
-                p.pressure = m_ambientPressure;
-                p.size = cellSize;
-                m_gasParticles.push_back(p);
-                ++added;
-            }
-        }
-    }
+void SmokeSimulation::setCellSize(float v) {
+    m_cellSize = std::max(0.01f, v);
+    m_grid = Grid(m_nx, m_ny, m_nz, m_cellSize);
+    allocFluid();
+    buildSolidMask();
 }
 
-void SmokeSimulation::run(float deltaTime) {
-    float scaledDeltaTime = deltaTime * m_timeScale;
-    
-    // Jeśli czas jest zatrzymany, nie aktualizuj symulacji
-    if (m_timeScale <= 0.0f) {
-        return;
-    }
-
-    if (m_useGPU && m_computeProgram != 0) {
-        updateParticlesGPU(scaledDeltaTime);
-    } else {
-        //updateParticles(scaledDeltaTime);
-        //applyParticleInteractions();
-    }
-    
-    checkCollisions();
-    
-    // Aktualizuj occupancy po aktualizacji pozycji cząsteczek
-    //updateGridOccupancy();
+void SmokeSimulation::allocFluid() {
+    const size_t n = static_cast<size_t>(m_nx) * m_ny * m_nz;
+    m_u.assign(n, 0.f);
+    m_v.assign(n, 0.f);
+    m_w.assign(n, 0.f);
+    m_p.assign(n, 0.f);
+    m_s.assign(n, 0.f);
+    m_T.assign(n, 0.f);
+    m_solid.assign(n, 0);
+    m_uTmp.resize(n);
+    m_vTmp.resize(n);
+    m_wTmp.resize(n);
+    m_sTmp.resize(n);
+    m_TTmp.resize(n);
+    m_pTmp.resize(n);
 }
 
-void SmokeSimulation::updateParticles(float deltaTime) {
-    constexpr float maxVelocity = 10.0f;
-    const float cellSize = m_grid.getCellSize();
-    const glm::vec3 boundsMin = m_grid.getMinBounds();
-    const glm::vec3 boundsMax = m_grid.getMaxBounds();
-    const float halfH = m_simulationHeight * 0.5f;
-
-    const size_t n = m_gasParticles.size();
-    for (size_t i = 0; i < n; ++i) {
-        GasParticle& particle = m_gasParticles[i];
-
-        const glm::ivec3 oldGridPos = m_grid.worldToGrid(particle.position);
-        const int oldKey = gridPosToKey(oldGridPos);
-
-        float buoyancyForce = (m_ambientPressure - particle.pressure) * 0.001f;
-        particle.velocity.y += (m_gravity + buoyancyForce) * deltaTime;
-
-        float speed = glm::length(particle.velocity);
-        if (speed > maxVelocity)
-            particle.velocity = glm::normalize(particle.velocity) * maxVelocity;
-
-        const glm::vec3 newPosition = particle.position + particle.velocity * deltaTime;
-
-        if (m_grid.isValidWorldPosition(newPosition)) {
-            const glm::ivec3 newGridPos = m_grid.worldToGrid(newPosition);
-            const int newKey = gridPosToKey(newGridPos);
-            const size_t occ = (newKey >= 0 && newKey < m_totalCells) ? m_gridOccupancyFlat[newKey] : OCCUPANCY_EMPTY;
-
-            if (occ == OCCUPANCY_EMPTY || occ == i || newKey == oldKey) {
-                const glm::vec3 cellCenter = m_grid.gridToWorld(newGridPos);
-                const float distToCenter = glm::length(newPosition - cellCenter);
-                if (newKey == oldKey || distToCenter < cellSize * 0.4f)
-                    particle.position = newPosition;
-                else
-                    particle.position = cellCenter;
-            } else {
-                constexpr float vyThreshold = 0.05f;
-                const bool searchNeighbor = std::abs(particle.velocity.y) > vyThreshold;
-                if (searchNeighbor) {
-                    const bool blockedFromBelow = particle.velocity.y < -0.05f;
-                    const glm::ivec3 freeNeighbor = findFreeNeighborCell(oldGridPos, particle.velocity);
-                    if (freeNeighbor != oldGridPos && m_grid.isValidPosition(freeNeighbor)) {
-                        particle.position = m_grid.gridToWorld(freeNeighbor);
-                        particle.velocity.x *= 0.7f;
-                        particle.velocity.z *= 0.7f;
-                        if (blockedFromBelow) particle.velocity.y = 0.0f;
-                    } else {
-                        particle.velocity.x = 0.0f;
-                        particle.velocity.y = 0.0f;
-                        particle.velocity.z = 0.0f;
-                        particle.position = m_grid.gridToWorld(oldGridPos);
-                    }
-                } else {
-                    particle.velocity.x = 0.0f;
-                    particle.velocity.y = 0.0f;
-                    particle.velocity.z = 0.0f;
-                    particle.position = m_grid.gridToWorld(oldGridPos);
-                }
-            }
-        } else {
-            if (newPosition.x < boundsMin.x || newPosition.x > boundsMax.x) {
-                particle.velocity.x *= -0.5f;
-                particle.position.x = std::clamp(particle.position.x, boundsMin.x, boundsMax.x);
-            }
-            if (newPosition.y < boundsMin.y || newPosition.y > boundsMax.y) {
-                particle.velocity.y = 0.0f;
-                particle.position.y = std::clamp(particle.position.y, boundsMin.y, boundsMax.y);
-            }
-            if (newPosition.z < boundsMin.z || newPosition.z > boundsMax.z) {
-                particle.velocity.z *= -0.5f;
-                particle.position.z = std::clamp(particle.position.z, boundsMin.z, boundsMax.z);
-            }
-        }
-
-        particle.velocity *= m_dampingFactor;
-        const float heightFactor = (particle.position.y + halfH) / static_cast<float>(m_simulationHeight);
-        particle.pressure = m_ambientPressure * (1.0f - heightFactor * 0.1f);
-
-        const glm::ivec3 finalGridPos = m_grid.worldToGrid(particle.position);
-        const int finalKey = gridPosToKey(finalGridPos);
-        if (oldKey != finalKey && oldKey >= 0 && oldKey < m_totalCells && finalKey >= 0 && finalKey < m_totalCells) {
-            if (m_gridOccupancyFlat[static_cast<size_t>(oldKey)] == i)
-                m_gridOccupancyFlat[static_cast<size_t>(oldKey)] = OCCUPANCY_EMPTY;
-            m_gridOccupancyFlat[static_cast<size_t>(finalKey)] = i;
-        }
-    }
+void SmokeSimulation::buildSolidMask() {
+    for (int k = 0; k < m_nz; ++k)
+        for (int j = 0; j < m_ny; ++j)
+            for (int i = 0; i < m_nx; ++i)
+                m_solid[flidx(i, j, k)] = isPointInObstacle(cellCenter(i, j, k)) ? 1 : 0;
 }
 
-void SmokeSimulation::checkCollisions() {
-    constexpr float boundaryMargin = 0.1f;
-    const float hw = m_simulationWidth * 0.5f;
-    const float hh = m_simulationHeight * 0.5f;
-    const float hd = m_simulationDepth * 0.5f;
-    const float xMin = -hw + boundaryMargin, xMax = hw - boundaryMargin;
-    const float yMin = -hh + boundaryMargin, yMax = hh - boundaryMargin;
-    const float zMin = -hd + boundaryMargin, zMax = hd - boundaryMargin;
-
-    for (GasParticle& p : m_gasParticles) {
-        if (p.position.x < xMin) { p.position.x = xMin; p.velocity.x *= -0.5f; }
-        if (p.position.x > xMax) { p.position.x = xMax; p.velocity.x *= -0.5f; }
-        if (p.position.y < yMin) { p.position.y = yMin; p.velocity.y = 0.0f; }
-        if (p.position.y > yMax) { p.position.y = yMax; p.velocity.y = 0.0f; }
-        if (p.position.z < zMin) { p.position.z = zMin; p.velocity.z *= -0.5f; }
-        if (p.position.z > zMax) { p.position.z = zMax; p.velocity.z *= -0.5f; }
-
-        for (const Obstacle& obs : m_obstacles) {
-            const glm::vec3 half = obs.size * 0.5f;
-            const float minX = obs.position.x - half.x, maxX = obs.position.x + half.x;
-            const float minY = obs.position.y - half.y, maxY = obs.position.y + half.y;
-            const float minZ = obs.position.z - half.z, maxZ = obs.position.z + half.z;
-            if (p.position.x < minX || p.position.x > maxX || p.position.y < minY || p.position.y > maxY ||
-                p.position.z < minZ || p.position.z > maxZ)
-                continue;
-
-            glm::vec3 toP = p.position - obs.position;
-            const float dX = std::min(std::abs(p.position.x - minX), std::abs(p.position.x - maxX));
-            const float dY = std::min(std::abs(p.position.y - minY), std::abs(p.position.y - maxY));
-            const float dZ = std::min(std::abs(p.position.z - minZ), std::abs(p.position.z - maxZ));
-            glm::vec3 n(0.0f);
-            if (dX < dY && dX < dZ)      n = glm::vec3(toP.x > 0 ? 1.0f : -1.0f, 0.0f, 0.0f);
-            else if (dY < dZ)            n = glm::vec3(0.0f, toP.y > 0 ? 1.0f : -1.0f, 0.0f);
-            else                         n = glm::vec3(0.0f, 0.0f, toP.z > 0 ? 1.0f : -1.0f);
-
-            p.velocity = p.velocity - 2.0f * glm::dot(p.velocity, n) * n;
-            p.velocity *= 0.7f;
-            p.position += n * 0.1f;
-            break;
-        }
-    }
-}
-
-bool SmokeSimulation::isPointInObstacle(const glm::vec3& point) const {
-    for (const auto& obstacle : m_obstacles) {
-        glm::vec3 halfSize = obstacle.size * 0.5f;
-        glm::vec3 min = obstacle.position - halfSize;
-        glm::vec3 max = obstacle.position + halfSize;
-        
-        if (point.x >= min.x && point.x <= max.x &&
-            point.y >= min.y && point.y <= max.y &&
-            point.z >= min.z && point.z <= max.z) {
+bool SmokeSimulation::isPointInObstacle(const glm::vec3& p) const {
+    for (const auto& o : m_obstacles) {
+        glm::vec3 h = o.size * 0.5f;
+        if (p.x >= o.position.x - h.x && p.x <= o.position.x + h.x &&
+            p.y >= o.position.y - h.y && p.y <= o.position.y + h.y &&
+            p.z >= o.position.z - h.z && p.z <= o.position.z + h.z)
             return true;
-        }
     }
     return false;
 }
 
-glm::vec3 SmokeSimulation::getCollisionNormal(const glm::vec3& point, const Obstacle& obstacle) const {
-    glm::vec3 toPoint = point - obstacle.position;
-    
-    // Zwróć normalną w kierunku najbliższej ściany
-    glm::vec3 halfSize = obstacle.size * 0.5f;
-    float distX = std::min(std::abs(point.x - (obstacle.position.x - halfSize.x)), 
-                          std::abs(point.x - (obstacle.position.x + halfSize.x)));
-    float distY = std::min(std::abs(point.y - (obstacle.position.y - halfSize.y)), 
-                          std::abs(point.y - (obstacle.position.y + halfSize.y)));
-    float distZ = std::min(std::abs(point.z - (obstacle.position.z - halfSize.z)), 
-                          std::abs(point.z - (obstacle.position.z + halfSize.z)));
-    
-    if (distX < distY && distX < distZ) {
-        return glm::vec3(toPoint.x > 0 ? 1.0f : -1.0f, 0.0f, 0.0f);
-    } else if (distY < distZ) {
-        return glm::vec3(0.0f, toPoint.y > 0 ? 1.0f : -1.0f, 0.0f);
-    } else {
-        return glm::vec3(0.0f, 0.0f, toPoint.z > 0 ? 1.0f : -1.0f);
+bool SmokeSimulation::isSolid(int i, int j, int k) const {
+    if (i < 0 || i >= m_nx || j < 0 || j >= m_ny || k < 0 || k >= m_nz) return true;
+    return m_solid[flidx(i, j, k)] != 0;
+}
+
+glm::vec3 SmokeSimulation::cellCenter(int i, int j, int k) const {
+    return m_grid.gridToWorld(glm::ivec3(i, j, k));
+}
+
+float SmokeSimulation::sampleTrilinear(const std::vector<float>& f, float cx, float cy, float cz) const {
+    cx = std::max(0.f, std::min(static_cast<float>(m_nx) - 1.001f, cx));
+    cy = std::max(0.f, std::min(static_cast<float>(m_ny) - 1.001f, cy));
+    cz = std::max(0.f, std::min(static_cast<float>(m_nz) - 1.001f, cz));
+    int i0 = static_cast<int>(std::floor(cx)), i1 = std::min(i0 + 1, m_nx - 1);
+    int j0 = static_cast<int>(std::floor(cy)), j1 = std::min(j0 + 1, m_ny - 1);
+    int k0 = static_cast<int>(std::floor(cz)), k1 = std::min(k0 + 1, m_nz - 1);
+    float fx = cx - i0, fy = cy - j0, fz = cz - k0;
+    auto v = [&](int i, int j, int k) { return f[flidx(i, j, k)]; };
+    float v000 = v(i0, j0, k0), v100 = v(i1, j0, k0), v010 = v(i0, j1, k0), v110 = v(i1, j1, k0);
+    float v001 = v(i0, j0, k1), v101 = v(i1, j0, k1), v011 = v(i0, j1, k1), v111 = v(i1, j1, k1);
+    float a = v000 * (1 - fx) + v100 * fx;
+    float b = v010 * (1 - fx) + v110 * fx;
+    float c = v001 * (1 - fx) + v101 * fx;
+    float d = v011 * (1 - fx) + v111 * fx;
+    float e = a * (1 - fy) + b * fy;
+    float g = c * (1 - fy) + d * fy;
+    return e * (1 - fz) + g * fz;
+}
+
+void SmokeSimulation::run(float deltaTime) {
+    ++s_dbgFrames;
+    float dt = deltaTime * m_timeScale;
+    if (m_timeScale <= 0.f || m_nx * m_ny * m_nz == 0) return;
+    runFluid(dt);
+}
+
+void SmokeSimulation::runFluid(float dt) {
+    const bool dbg = (s_dbgFrames % DBG_LOG_INTERVAL == 1);
+
+    injectSmoke(dt);
+    addBuoyancyGravity(dt);
+
+    if (dbg && s_dbgInjectSp.x >= 0 && s_dbgInjectSp.y >= 0 && s_dbgInjectSp.z >= 0) {
+        int i = s_dbgInjectSp.x, j = s_dbgInjectSp.y, k = s_dbgInjectSp.z;
+        if (i < m_nx && j < m_ny && k < m_nz) {
+            size_t id = flidx(i, j, k);
+            glm::vec3 c = cellCenter(i, j, k);
+            std::ostringstream os;
+            os << "frame=" << s_dbgFrames << " gravity=" << m_gravity << " +Y=up | u,v,w@sp=(" << m_u[id] << "," << m_v[id] << "," << m_w[id]
+               << ") world=(" << c.x << "," << c.y << "," << c.z << ")";
+            dbgLog("DIRECTION", os.str());
+        }
+    }
+
+    advect(dt);
+    pressureSolve(40);
+    project();
+    dissipate(dt);
+
+    if (dbg) {
+        constexpr float thresh = 0.01f;
+        int imin = m_nx, imax = -1, jmin = m_ny, jmax = -1, kmin = m_nz, kmax = -1;
+        int n = 0;
+        for (int k = 0; k < m_nz; ++k)
+            for (int j = 0; j < m_ny; ++j)
+                for (int i = 0; i < m_nx; ++i) {
+                    if (m_s[flidx(i, j, k)] <= thresh) continue;
+                    ++n;
+                    imin = std::min(imin, i); imax = std::max(imax, i);
+                    jmin = std::min(jmin, j); jmax = std::max(jmax, j);
+                    kmin = std::min(kmin, k); kmax = std::max(kmax, k);
+                }
+        glm::vec3 mn = m_grid.getMinBounds(), mx = m_grid.getMaxBounds();
+        std::ostringstream os;
+        os << "frame=" << s_dbgFrames << " cells=" << n;
+        if (n > 0)
+            os << " span i[" << imin << ".." << imax << "] j[" << jmin << ".." << jmax << "] k[" << kmin << ".." << kmax << "]";
+        else
+            os << " span N/A";
+        dbgLog("BOUNDS", os.str());
+        if (n > 0) {
+            glm::vec3 pmin = cellCenter(imin, jmin, kmin);
+            glm::vec3 pmax = cellCenter(imax, jmax, kmax);
+            std::ostringstream os2;
+            os2 << "smoke world [" << pmin.x << "," << pmin.y << "," << pmin.z << "]..[" << pmax.x << "," << pmax.y << "," << pmax.z
+                << "] grid [" << mn.x << "," << mn.y << "," << mn.z << "]..[" << mx.x << "," << mx.y << "," << mx.z << "]";
+            dbgLog("BOUNDS", os2.str());
+        }
     }
 }
 
-void SmokeSimulation::addObstacle(const Obstacle& obstacle) {
-    m_obstacles.push_back(obstacle);
+void SmokeSimulation::injectSmoke(float dt) {
+    glm::vec3 mn = m_grid.getMinBounds();
+    glm::vec3 mx = m_grid.getMaxBounds();
+    glm::vec3 injectCenterRaw = m_spawnerPosition + glm::vec3(0.f, m_cellSize, 0.f);
+    glm::vec3 injectCenter = injectCenterRaw;
+    injectCenter.x = std::max(mn.x, std::min(mx.x, injectCenter.x));
+    injectCenter.y = std::max(mn.y, std::min(mx.y, injectCenter.y));
+    injectCenter.z = std::max(mn.z, std::min(mx.z, injectCenter.z));
+    glm::ivec3 sp = m_grid.worldToGrid(injectCenter);
+    sp.x = std::max(0, std::min(m_nx - 1, sp.x));
+    sp.y = std::max(0, std::min(m_ny - 1, sp.y));
+    sp.z = std::max(0, std::min(m_nz - 1, sp.z));
+    s_dbgInjectSp = sp;
+    const float rate = m_injectRate * dt;
+    const float T_inj = m_Tamb + 80.f;
+    const float vUp = 2.5f;
+
+    const bool dbg = (s_dbgFrames % DBG_LOG_INTERVAL == 1);
+    int injected = 0;
+    float sBefore = 0.f;
+    size_t idSp = flidx(sp.x, sp.y, sp.z);
+    if (dbg) sBefore = m_s[idSp];
+
+    for (int di = -m_injectRadius; di <= m_injectRadius; ++di)
+        for (int dj = -m_injectRadius; dj <= m_injectRadius; ++dj)
+            for (int dk = -m_injectRadius; dk <= m_injectRadius; ++dk) {
+                int i = sp.x + di, j = sp.y + dj, k = sp.z + dk;
+                if (i < 0 || i >= m_nx || j < 0 || j >= m_ny || k < 0 || k >= m_nz) continue;
+                if (isSolid(i, j, k)) continue;
+                size_t id = flidx(i, j, k);
+                m_s[id] = std::min(1.f, m_s[id] + rate);
+                m_T[id] = T_inj;
+                m_v[id] += vUp * rate + 0.5f * dt;
+                ++injected;
+            }
+
+    if (dbg) {
+        std::ostringstream os;
+        os << "frame=" << s_dbgFrames << " spawner=(" << m_spawnerPosition.x << "," << m_spawnerPosition.y << "," << m_spawnerPosition.z << ")"
+           << " injectRaw=(" << injectCenterRaw.x << "," << injectCenterRaw.y << "," << injectCenterRaw.z << ")"
+           << " injectClamp=(" << injectCenter.x << "," << injectCenter.y << "," << injectCenter.z << ")"
+           << " sp=(" << sp.x << "," << sp.y << "," << sp.z << ")"
+           << " injectRate=" << m_injectRate << " dissip=" << m_dissipation
+           << " rate=" << rate << " dt=" << dt << " injected=" << injected
+           << " s@sp " << sBefore << "->" << m_s[idSp]
+           << " v@sp=(" << m_u[idSp] << "," << m_v[idSp] << "," << m_w[idSp] << ")";
+        dbgLog("SPAWNER", os.str());
+        bool spawnerIn = m_grid.isValidWorldPosition(m_spawnerPosition);
+        bool injectIn = m_grid.isValidWorldPosition(injectCenterRaw);
+        dbgLog("SPAWNER", std::string("spawnerInGrid=") + (spawnerIn ? "1" : "0") + " injectRawInGrid=" + (injectIn ? "1" : "0"));
+        if (injected == 0)
+            dbgLog("SPAWNER", "WARN: zero cells injected (oob or solid?)");
+    }
 }
 
-void SmokeSimulation::removeObstacle(size_t index) {
-    if (index < m_obstacles.size()) {
-        m_obstacles.erase(m_obstacles.begin() + index);
+void SmokeSimulation::dissipate(float dt) {
+    const float d = std::max(0.f, 1.f - m_dissipation * dt);
+    for (size_t id = 0; id < m_s.size(); ++id) {
+        m_s[id] *= d;
+        m_T[id] = m_Tamb + (m_T[id] - m_Tamb) * d;
+    }
+}
+
+void SmokeSimulation::addBuoyancyGravity(float dt) {
+    for (int k = 0; k < m_nz; ++k)
+        for (int j = 0; j < m_ny; ++j)
+            for (int i = 0; i < m_nx; ++i) {
+                if (isSolid(i, j, k)) continue;
+                size_t id = flidx(i, j, k);
+                float b = -m_buoyancyAlpha * m_s[id] + m_buoyancyBeta * (m_T[id] - m_Tamb);
+                m_v[id] += (m_gravity + b) * dt;
+            }
+}
+
+void SmokeSimulation::advect(float dt) {
+    const float dx = m_cellSize;
+    const glm::vec3 o = m_grid.getMinBounds();
+    m_uTmp = m_u;
+    m_vTmp = m_v;
+    m_wTmp = m_w;
+    m_sTmp = m_s;
+    m_TTmp = m_T;
+
+    for (int k = 0; k < m_nz; ++k)
+        for (int j = 0; j < m_ny; ++j)
+            for (int i = 0; i < m_nx; ++i) {
+                if (isSolid(i, j, k)) continue;
+                glm::vec3 pos = cellCenter(i, j, k);
+                size_t id = flidx(i, j, k);
+                float u0 = m_u[id], v0 = m_v[id], w0 = m_w[id];
+                float s0 = m_s[id], T0 = m_T[id];
+                glm::vec3 back = pos - dt * glm::vec3(u0, v0, w0);
+                glm::vec3 local = (back - o) / dx;
+                int ci = static_cast<int>(std::floor(local.x));
+                int cj = static_cast<int>(std::floor(local.y));
+                int ck = static_cast<int>(std::floor(local.z));
+                ci = std::max(0, std::min(m_nx - 1, ci));
+                cj = std::max(0, std::min(m_ny - 1, cj));
+                ck = std::max(0, std::min(m_nz - 1, ck));
+                bool atBoundary = (ci == 0 || ci == m_nx - 1 || cj == 0 || cj == m_ny - 1 || ck == 0 || ck == m_nz - 1);
+                bool fromSolid = isSolid(ci, cj, ck);
+                if (atBoundary || fromSolid) {
+                    m_uTmp[id] = u0;
+                    m_vTmp[id] = v0;
+                    m_wTmp[id] = w0;
+                    if (fromSolid) {
+                        m_sTmp[id] = 0.f;
+                        m_TTmp[id] = m_Tamb;
+                    } else {
+                        bool onBoundary = (i == 0 || i == m_nx - 1 || j == 0 || j == m_ny - 1 || k == 0 || k == m_nz - 1);
+                        if (onBoundary) {
+                            int ii = i, jj = j, kk = k;
+                            if      (j == m_ny - 1 && m_ny > 1) jj = m_ny - 2;
+                            else if (j == 0       && m_ny > 1) jj = 1;
+                            else if (i == m_nx - 1 && m_nx > 1) ii = m_nx - 2;
+                            else if (i == 0       && m_nx > 1) ii = 1;
+                            else if (k == m_nz - 1 && m_nz > 1) kk = m_nz - 2;
+                            else if (k == 0       && m_nz > 1) kk = 1;
+                            ii = std::max(0, std::min(m_nx - 1, ii));
+                            jj = std::max(0, std::min(m_ny - 1, jj));
+                            kk = std::max(0, std::min(m_nz - 1, kk));
+                            m_sTmp[id] = m_s[flidx(ii, jj, kk)];
+                            m_TTmp[id] = m_T[flidx(ii, jj, kk)];
+                        } else {
+                            m_sTmp[id] = s0;
+                            m_TTmp[id] = T0;
+                        }
+                    }
+                } else {
+                    m_uTmp[id] = sampleTrilinear(m_u, local.x, local.y, local.z);
+                    m_vTmp[id] = sampleTrilinear(m_v, local.x, local.y, local.z);
+                    m_wTmp[id] = sampleTrilinear(m_w, local.x, local.y, local.z);
+                    m_sTmp[id] = sampleTrilinear(m_s, local.x, local.y, local.z);
+                    m_TTmp[id] = sampleTrilinear(m_T, local.x, local.y, local.z);
+                }
+            }
+
+    m_u.swap(m_uTmp);
+    m_v.swap(m_vTmp);
+    m_w.swap(m_wTmp);
+    m_s.swap(m_sTmp);
+    m_T.swap(m_TTmp);
+
+    for (int k = 0; k < m_nz; ++k)
+        for (int j = 0; j < m_ny; ++j)
+            for (int i = 0; i < m_nx; ++i) {
+                size_t id = flidx(i, j, k);
+                if (isSolid(i, j, k)) {
+                    m_u[id] = m_v[id] = m_w[id] = 0.f;
+                    continue;
+                }
+                if (i == 0 || i == m_nx - 1) m_u[id] = 0.f;
+                if (j == 0 || j == m_ny - 1) m_v[id] = 0.f;
+                if (k == 0 || k == m_nz - 1) m_w[id] = 0.f;
+            }
+}
+
+void SmokeSimulation::pressureSolve(int iterations) {
+    const float dx = m_cellSize;
+    const size_t n = static_cast<size_t>(m_nx) * m_ny * m_nz;
+    std::vector<float> div(n, 0.f);
+
+    for (int k = 0; k < m_nz; ++k)
+        for (int j = 0; j < m_ny; ++j)
+            for (int i = 0; i < m_nx; ++i) {
+                if (isSolid(i, j, k)) continue;
+                size_t id = flidx(i, j, k);
+                float du = (i + 1 < m_nx && !isSolid(i + 1, j, k) ? m_u[flidx(i + 1, j, k)] : m_u[id])
+                         - (i - 1 >= 0 && !isSolid(i - 1, j, k) ? m_u[flidx(i - 1, j, k)] : m_u[id]);
+                float dv = (j + 1 < m_ny && !isSolid(i, j + 1, k) ? m_v[flidx(i, j + 1, k)] : m_v[id])
+                         - (j - 1 >= 0 && !isSolid(i, j - 1, k) ? m_v[flidx(i, j - 1, k)] : m_v[id]);
+                float dw = (k + 1 < m_nz && !isSolid(i, j, k + 1) ? m_w[flidx(i, j, k + 1)] : m_w[id])
+                         - (k - 1 >= 0 && !isSolid(i, j, k - 1) ? m_w[flidx(i, j, k - 1)] : m_w[id]);
+                div[id] = (du + dv + dw) / dx;
+            }
+
+    std::fill(m_p.begin(), m_p.end(), 0.f);
+    const float dx2 = dx * dx;
+    for (int it = 0; it < iterations; ++it) {
+        for (int k = 0; k < m_nz; ++k)
+            for (int j = 0; j < m_ny; ++j)
+                for (int i = 0; i < m_nx; ++i) {
+                    if (isSolid(i, j, k)) continue;
+                    float sum = 0.f;
+                    int nn = 0;
+                    if (i + 1 < m_nx && !isSolid(i + 1, j, k)) { sum += m_p[flidx(i + 1, j, k)]; ++nn; }
+                    if (i - 1 >= 0 && !isSolid(i - 1, j, k)) { sum += m_p[flidx(i - 1, j, k)]; ++nn; }
+                    if (j + 1 < m_ny && !isSolid(i, j + 1, k)) { sum += m_p[flidx(i, j + 1, k)]; ++nn; }
+                    if (j - 1 >= 0 && !isSolid(i, j - 1, k)) { sum += m_p[flidx(i, j - 1, k)]; ++nn; }
+                    if (k + 1 < m_nz && !isSolid(i, j, k + 1)) { sum += m_p[flidx(i, j, k + 1)]; ++nn; }
+                    if (k - 1 >= 0 && !isSolid(i, j, k - 1)) { sum += m_p[flidx(i, j, k - 1)]; ++nn; }
+                    size_t id = flidx(i, j, k);
+                    m_pTmp[id] = (sum - dx2 * div[id]) / static_cast<float>(std::max(1, nn));
+                }
+        m_p.swap(m_pTmp);
+    }
+}
+
+void SmokeSimulation::project() {
+    const float dx = m_cellSize;
+    for (int k = 0; k < m_nz; ++k)
+        for (int j = 0; j < m_ny; ++j)
+            for (int i = 0; i < m_nx; ++i) {
+                if (isSolid(i, j, k)) continue;
+                size_t id = flidx(i, j, k);
+                float dpdx = 0.f, dpdy = 0.f, dpdz = 0.f;
+                if (i + 1 < m_nx && !isSolid(i + 1, j, k) && i - 1 >= 0 && !isSolid(i - 1, j, k))
+                    dpdx = (m_p[flidx(i + 1, j, k)] - m_p[flidx(i - 1, j, k)]) / (2.f * dx);
+                if (j + 1 < m_ny && !isSolid(i, j + 1, k) && j - 1 >= 0 && !isSolid(i, j - 1, k))
+                    dpdy = (m_p[flidx(i, j + 1, k)] - m_p[flidx(i, j - 1, k)]) / (2.f * dx);
+                if (k + 1 < m_nz && !isSolid(i, j, k + 1) && k - 1 >= 0 && !isSolid(i, j, k - 1))
+                    dpdz = (m_p[flidx(i, j, k + 1)] - m_p[flidx(i, j, k - 1)]) / (2.f * dx);
+                m_u[id] -= dpdx;
+                m_v[id] -= dpdy;
+                m_w[id] -= dpdz;
+            }
+
+    for (int k = 0; k < m_nz; ++k)
+        for (int j = 0; j < m_ny; ++j)
+            for (int i = 0; i < m_nx; ++i) {
+                if (isSolid(i, j, k)) {
+                    size_t id = flidx(i, j, k);
+                    m_u[id] = m_v[id] = m_w[id] = 0.f;
+                }
+                if (i == 0 || i == m_nx - 1) m_u[flidx(i, j, k)] = 0.f;
+                if (j == 0 || j == m_ny - 1) m_v[flidx(i, j, k)] = 0.f;
+                if (k == 0 || k == m_nz - 1) m_w[flidx(i, j, k)] = 0.f;
+            }
+}
+
+void SmokeSimulation::addObstacle(const Obstacle& o) {
+    m_obstacles.push_back(o);
+    buildSolidMask();
+}
+
+void SmokeSimulation::removeObstacle(size_t i) {
+    if (i < m_obstacles.size()) {
+        m_obstacles.erase(m_obstacles.begin() + static_cast<std::ptrdiff_t>(i));
+        buildSolidMask();
     }
 }
 
 void SmokeSimulation::clearObstacles() {
     m_obstacles.clear();
+    buildSolidMask();
 }
 
-void SmokeSimulation::addParticlesAt(const glm::vec3& position, int count) {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> velDist(-1.0f, 1.0f);
-    
-    const glm::ivec3 centerGridPos = m_grid.worldToGrid(position);
-    const float cellSize = m_grid.getCellSize();
-
-    int added = 0;
-    for (int offset = 0; offset < 10 && added < count; ++offset) {
-        for (int dx = -offset; dx <= offset && added < count; ++dx) {
-            for (int dy = -offset; dy <= offset && added < count; ++dy) {
-                for (int dz = -offset; dz <= offset && added < count; ++dz) {
-                    glm::ivec3 gridPos = centerGridPos + glm::ivec3(dx, dy, dz);
-                    
-                    if (canPlaceParticleAt(gridPos)) {
-                        GasParticle particle;
-                        particle.position = m_grid.gridToWorld(gridPos);
-                        particle.velocity = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
-                        particle.density = m_particleDensity;
-                        particle.pressure = m_ambientPressure;
-                        particle.size = cellSize;
-                        m_gasParticles.push_back(particle);
-                        added++;
-                    }
-                }
-            }
-        }
-    }
-    
-    updateGridOccupancy();
-    
-    if (m_useGPU && m_computeProgram != 0) {
-        updateComputeBuffers();
-    }
+int SmokeSimulation::getSmokeCellCount() const {
+    constexpr float thresh = 0.01f;
+    int n = 0;
+    for (float v : m_s)
+        if (v > thresh) ++n;
+    return n;
 }
-
-void SmokeSimulation::spawnParticles(int count) {
-    addParticlesAt(m_spawnerPosition, count);
-}
-
-int SmokeSimulation::gridPosToKey(const glm::ivec3& gridPos) const {
-    return gridPos.x + gridPos.y * m_strideY + gridPos.z * m_strideZ;
-}
-
-glm::ivec3 SmokeSimulation::keyToGridPos(int key) const {
-    const int z = key / m_strideZ;
-    const int remainder = key % m_strideZ;
-    const int y = remainder / m_strideY;
-    const int x = remainder % m_strideY;
-    return { x, y, z };
-}
-
-bool SmokeSimulation::canPlaceParticleAt(const glm::ivec3& gridPos) const {
-    if (!m_grid.isValidPosition(gridPos)) return false;
-    const int key = gridPosToKey(gridPos);
-    return key >= 0 && key < m_totalCells && m_gridOccupancyFlat[key] == OCCUPANCY_EMPTY;
-}
-
-glm::ivec3 SmokeSimulation::findFreeNeighborCell(const glm::ivec3& gridPos, const glm::vec3& velocity) const {
-    glm::ivec3 const direction = glm::ivec3(
-        velocity.x > 0.1f ? 1 : (velocity.x < -0.1f ? -1 : 0),
-        velocity.y > 0.1f ? 1 : (velocity.y < -0.1f ? -1 : 0),
-        velocity.z > 0.1f ? 1 : (velocity.z < -0.1f ? -1 : 0)
-    );
-    const int range = 10;
-
-    glm::ivec3 candidates[] = {
-        gridPos + direction,
-        gridPos + glm::ivec3(direction.x, 0, 0),
-        gridPos + glm::ivec3(0, direction.y, 0),
-        gridPos + glm::ivec3(0, 0, direction.z),
-        gridPos + glm::ivec3(direction.x, direction.y, 0),
-        gridPos + glm::ivec3(direction.x, 0, direction.z),
-        gridPos + glm::ivec3(0, direction.y, direction.z),
-    };
-    for (const auto& c : candidates) {
-        if (canPlaceParticleAt(c)) return c;
-    }
-    for (int dy = -range; dy <= range; ++dy) {
-        for (int dx = -range; dx <= range; ++dx) {
-            for (int dz = -range; dz <= range; ++dz) {
-                if (dx == 0 && dy == 0 && dz == 0) continue;
-                const glm::ivec3 n = gridPos + glm::ivec3(dx, dy, dz);
-                if (canPlaceParticleAt(n)) return n;
-            }
-        }
-    }
-    return gridPos;
-}
-
-void SmokeSimulation::updateGridOccupancy() {
-    m_gridOccupancyFlat.assign(static_cast<size_t>(m_totalCells), OCCUPANCY_EMPTY);
-    std::vector<size_t> toRemove;
-    toRemove.reserve(256);
-
-    for (size_t i = 0; i < m_gasParticles.size(); ++i) {
-        const glm::ivec3 gp = m_grid.worldToGrid(m_gasParticles[i].position);
-        if (!m_grid.isValidPosition(gp)) continue;
-        const int key = gridPosToKey(gp);
-        if (key < 0 || key >= m_totalCells) continue;
-        if (m_gridOccupancyFlat[key] != OCCUPANCY_EMPTY) {
-            toRemove.push_back(i);
-            continue;
-        }
-        m_gridOccupancyFlat[key] = i;
-    }
-
-    if (toRemove.empty()) return;
-
-    std::sort(toRemove.begin(), toRemove.end(), [](const size_t &a, const size_t &b) { return a > b; });
-    for (const size_t &idx : toRemove) {
-        std::swap(m_gasParticles[idx], m_gasParticles.back());
-        m_gasParticles.pop_back();
-    }
-
-    m_gridOccupancyFlat.assign(static_cast<size_t>(m_totalCells), OCCUPANCY_EMPTY);
-    for (size_t i = 0; i < m_gasParticles.size(); ++i) {
-        const glm::ivec3 gp = m_grid.worldToGrid(m_gasParticles[i].position);
-        if (!m_grid.isValidPosition(gp)) continue;
-        const int key = gridPosToKey(gp);
-        if (key >= 0 && key < m_totalCells)
-            m_gridOccupancyFlat[key] = i;
-    }
-}
-
-void SmokeSimulation::updateGridStrides() {
-    const int sx = m_grid.getSizeX(), sy = m_grid.getSizeY(), sz = m_grid.getSizeZ();
-    m_strideY = sx;
-    m_strideZ = sx * sy;
-    m_totalCells = sx * sy * sz;
-}
-
-void SmokeSimulation::applyParticleInteractions()
-{
-    // Sprawdź czy cząsteczki są w sąsiednich komórkach grid'a
-    for (size_t i = 0; i < m_gasParticles.size(); ++i) {
-        auto& particle1 = m_gasParticles[i];
-        glm::ivec3 gridPos1 = m_grid.worldToGrid(particle1.position);
-        
-        for (size_t j = i + 1; j < m_gasParticles.size(); ++j) {
-            auto& particle2 = m_gasParticles[j];
-            glm::ivec3 gridPos2 = m_grid.worldToGrid(particle2.position);
-            
-            // Sprawdź czy są w tej samej lub sąsiednich komórkach
-            glm::ivec3 diff = gridPos1 - gridPos2;
-            int manhattanDist = std::abs(diff.x) + std::abs(diff.y) + std::abs(diff.z);
-            
-            // Jeśli są w tej samej komórce lub bezpośrednio sąsiednich (Manhattan distance <= 1)
-            // to nie dodawaj sił odpychających - pozwól grid'owi to obsłużyć
-            if (manhattanDist <= 1) {
-                // Wyzeruj prędkość w kierunku drugiej cząsteczki, żeby nie skakały
-                glm::vec3 posDiff = particle1.position - particle2.position;
-                float distance = glm::length(posDiff);
-                
-                if (distance < m_grid.getCellSize() && distance > 0.001f) {
-                    // Tylko w osiach X i Z - w osi Y wszystkie cząsteczki mają podobną prędkość
-                    glm::vec3 direction = posDiff / distance;
-                    // Wyzeruj składową Y kierunku (tylko XZ)
-                    direction.y = 0.0f;
-                    float dirLength = glm::length(direction);
-                    
-                    if (dirLength > 0.001f) {
-                        direction = glm::normalize(direction);
-                        
-                        // Wyzeruj tylko składowe X i Z prędkości
-                        glm::vec3 velXZ1 = glm::vec3(particle1.velocity.x, 0.0f, particle1.velocity.z);
-                        float velDot1 = glm::dot(velXZ1, direction);
-                        if (velDot1 > 0.0f) {
-                            // Tylko jeśli porusza się w kierunku drugiej cząsteczki (w płaszczyźnie XZ)
-                            particle1.velocity.x -= direction.x * velDot1 * 0.5f;
-                            particle1.velocity.z -= direction.z * velDot1 * 0.5f;
-                        }
-                        
-                        // To samo dla drugiej cząsteczki
-                        glm::vec3 velXZ2 = glm::vec3(particle2.velocity.x, 0.0f, particle2.velocity.z);
-                        float velDot2 = glm::dot(velXZ2, -direction);
-                        if (velDot2 > 0.0f) {
-                            particle2.velocity.x -= (-direction.x) * velDot2 * 0.5f;
-                            particle2.velocity.z -= (-direction.z) * velDot2 * 0.5f;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-bool SmokeSimulation::initComputeBuffers() {
-    // Znajdź ścieżkę do shaderów
-    std::filesystem::path exePath = std::filesystem::current_path();
-    std::filesystem::path shaderDir = exePath / "shaders";
-    
-    if (!std::filesystem::exists(shaderDir)) {
-        std::filesystem::path possiblePaths[] = {
-            exePath.parent_path().parent_path() / "Simulation" / "shaders",
-            exePath / ".." / ".." / "Simulation" / "shaders",
-            exePath / ".." / "Simulation" / "shaders",
-            exePath.parent_path() / "shaders"
-        };
-        
-        for (const auto& path : possiblePaths) {
-            try {
-                if (std::filesystem::exists(path)) {
-                    shaderDir = std::filesystem::canonical(path);
-                    break;
-                }
-            } catch (...) {}
-        }
-    }
-    
-    std::string compPath = (shaderDir / "UpdateParticle.comp").string();
-    
-    // Załaduj compute shader
-    std::ifstream file(compPath);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open compute shader: " << compPath << std::endl;
-        return false;
-    }
-    
-    std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    file.close();
-    
-    const char* src = source.c_str();
-    GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
-    glShaderSource(shader, 1, &src, nullptr);
-    glCompileShader(shader);
-    
-    GLint success;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char log[2048];
-        glGetShaderInfoLog(shader, 2048, nullptr, log);
-        std::cerr << "Compute shader compilation failed: " << log << std::endl;
-        glDeleteShader(shader);
-        return false;
-    }
-    
-    m_computeProgram = glCreateProgram();
-    glAttachShader(m_computeProgram, shader);
-    glLinkProgram(m_computeProgram);
-    
-    glGetProgramiv(m_computeProgram, GL_LINK_STATUS, &success);
-    if (!success) {
-        char log[2048];
-        glGetProgramInfoLog(m_computeProgram, 2048, nullptr, log);
-        std::cerr << "Compute shader linking failed: " << log << std::endl;
-        glDeleteShader(shader);
-        glDeleteProgram(m_computeProgram);
-        m_computeProgram = 0;
-        return false;
-    }
-    
-    glDeleteShader(shader);
-    
-    // Utwórz buffery
-    glGenBuffers(1, &m_particleSSBO);
-    glGenBuffers(1, &m_occupancySSBO);
-    glGenBuffers(1, &m_paramsUBO);
-    
-    updateComputeBuffers();
-    
-    return true;
-}
-
-void SmokeSimulation::updateComputeBuffers() {
-    if (!m_useGPU || m_computeProgram == 0) return;
-    
-    // Aktualizuj SSBO cząsteczek
-    std::vector<GPUParticle> gpuParticles;
-    gpuParticles.reserve(m_gasParticles.size());
-    for (const auto& p : m_gasParticles) {
-        GPUParticle gp;
-        gp.position = p.position;
-        gp.velocity = p.velocity;
-        gp.pressure = p.pressure;
-        gpuParticles.push_back(gp);
-    }
-    
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_particleSSBO);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, gpuParticles.size() * sizeof(GPUParticle), 
-                 gpuParticles.data(), GL_DYNAMIC_DRAW);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_particleSSBO);
-    
-    // Aktualizuj SSBO occupancy (konwertuj size_t na uint32_t)
-    std::vector<uint32_t> occupancyUint(m_gridOccupancyFlat.size());
-    for (size_t i = 0; i < m_gridOccupancyFlat.size(); ++i) {
-        occupancyUint[i] = (m_gridOccupancyFlat[i] == OCCUPANCY_EMPTY) ? 0xFFFFFFFFu : static_cast<uint32_t>(m_gridOccupancyFlat[i]);
-    }
-    
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_occupancySSBO);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, occupancyUint.size() * sizeof(uint32_t), 
-                 occupancyUint.data(), GL_DYNAMIC_DRAW);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_occupancySSBO);
-    
-    // Aktualizuj UBO parametrów
-    SimParamsGPU params;
-    params.deltaTime = 0.0f;
-    params.gravity = m_gravity;
-    params.ambientPressure = m_ambientPressure;
-    params.dampingFactor = m_dampingFactor;
-    params.simulationHeight = static_cast<float>(m_simulationHeight);
-    params.cellSize = m_grid.getCellSize();
-    params.maxVelocity = 10.0f;
-    params.totalCells = static_cast<uint32_t>(m_totalCells);
-    params.boundsMin = m_grid.getMinBounds();
-    params.pad0 = 0.0f;
-    params.boundsMax = m_grid.getMaxBounds();
-    params.pad1 = 0.0f;
-    
-    glBindBuffer(GL_UNIFORM_BUFFER, m_paramsUBO);
-    glBufferData(GL_UNIFORM_BUFFER, sizeof(SimParamsGPU), &params, GL_DYNAMIC_DRAW);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 2, m_paramsUBO);
-    
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
-}
-
-void SmokeSimulation::updateParticlesGPU(float deltaTime) {
-    if (!m_useGPU || m_computeProgram == 0) return;
-    
-    // Aktualizuj SSBO cząsteczek z aktualnymi danymi z CPU
-    std::vector<GPUParticle> gpuParticles;
-    gpuParticles.reserve(m_gasParticles.size());
-    for (const auto& p : m_gasParticles) {
-        GPUParticle gp;
-        gp.position = p.position;
-        gp.velocity = p.velocity;
-        gp.pressure = p.pressure;
-        gpuParticles.push_back(gp);
-    }
-    
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_particleSSBO);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, gpuParticles.size() * sizeof(GPUParticle), 
-                 gpuParticles.data(), GL_DYNAMIC_DRAW);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_particleSSBO);
-    
-    // Aktualizuj SSBO occupancy
-    std::vector<uint32_t> occupancyUint(m_gridOccupancyFlat.size());
-    for (size_t i = 0; i < m_gridOccupancyFlat.size(); ++i) {
-        occupancyUint[i] = (m_gridOccupancyFlat[i] == OCCUPANCY_EMPTY) ? 0xFFFFFFFFu : static_cast<uint32_t>(m_gridOccupancyFlat[i]);
-    }
-    
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_occupancySSBO);
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, occupancyUint.size() * sizeof(uint32_t), occupancyUint.data());
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_occupancySSBO);
-    
-    // Aktualizuj parametry (deltaTime i inne)
-    SimParamsGPU params;
-    params.deltaTime = deltaTime;
-    params.gravity = m_gravity;
-    params.ambientPressure = m_ambientPressure;
-    params.dampingFactor = m_dampingFactor;
-    params.simulationHeight = static_cast<float>(m_simulationHeight);
-    params.cellSize = m_grid.getCellSize();
-    params.maxVelocity = 10.0f;
-    params.totalCells = static_cast<uint32_t>(m_totalCells);
-    params.boundsMin = m_grid.getMinBounds();
-    params.pad0 = 0.0f;
-    params.boundsMax = m_grid.getMaxBounds();
-    params.pad1 = 0.0f;
-    
-    glBindBuffer(GL_UNIFORM_BUFFER, m_paramsUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(SimParamsGPU), &params);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 2, m_paramsUBO);
-    
-    // Wywołaj compute shader
-    glUseProgram(m_computeProgram);
-    
-    const GLuint numGroups = m_gasParticles.empty() ? 0 : (static_cast<GLuint>(m_gasParticles.size()) + 31) / 32;
-    if (numGroups > 0) {
-        glDispatchCompute(numGroups, 1, 1);
-    }
-    
-    // Synchronizuj
-    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-    
-    // Pobierz wyniki z GPU
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_particleSSBO);
-    GPUParticle* gpuData = static_cast<GPUParticle*>(glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY));
-    
-    if (gpuData) {
-        for (size_t i = 0; i < m_gasParticles.size(); ++i) {
-            m_gasParticles[i].position = gpuData[i].position;
-            m_gasParticles[i].velocity = gpuData[i].velocity;
-            m_gasParticles[i].pressure = gpuData[i].pressure;
-        }
-        glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
-    }
-    
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
-    glUseProgram(0);
-}
-
-void SmokeSimulation::cleanupComputeBuffers() {
-    if (m_particleSSBO != 0) {
-        glDeleteBuffers(1, &m_particleSSBO);
-        m_particleSSBO = 0;
-    }
-    if (m_occupancySSBO != 0) {
-        glDeleteBuffers(1, &m_occupancySSBO);
-        m_occupancySSBO = 0;
-    }
-    if (m_paramsUBO != 0) {
-        glDeleteBuffers(1, &m_paramsUBO);
-        m_paramsUBO = 0;
-    }
-    if (m_computeProgram != 0) {
-        glDeleteProgram(m_computeProgram);
-        m_computeProgram = 0;
-    }
-}
-

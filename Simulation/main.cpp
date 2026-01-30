@@ -3,7 +3,7 @@
 int main() {
     Application app;
     
-    if (!app.Initialize(3000, 2000, "Symulacja Dymu")) {
+    if (!app.Initialize(1920, 1080, "Symulacja Dymu")) {
         return -1;
     }
     

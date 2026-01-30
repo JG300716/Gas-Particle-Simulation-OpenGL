@@ -12,7 +12,7 @@ public:
     ~Application();
 
     // Inicjalizacja aplikacji
-    bool Initialize(int windowWidth = 1280, int windowHeight = 720, const char* windowTitle = "Symulacja Dymu");
+    bool Initialize(int windowWidth = 680, int windowHeight = 420, const char* windowTitle = "Symulacja Dymu");
     
     // Uruchomienie głównej pętli
     void Run();

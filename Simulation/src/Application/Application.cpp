@@ -12,8 +12,8 @@
 
 Application::Application() 
     : m_window(nullptr), 
-      m_windowWidth(1280), 
-      m_windowHeight(720), 
+      m_windowWidth(680), 
+      m_windowHeight(420), 
       m_initialized(false),
       m_firstMouse(true),
       m_lastMouseX(0.0f),
@@ -139,16 +139,15 @@ bool Application::initializeSimulation() {
         return false;
     }
     
-    if (!m_simulation.initialize(100.0f, 100.0f, 100.0f, 1.0f)) {
+    if (!m_simulation.initialize(20, 20, 20, 1.0f)) {
         std::cerr << "Failed to initialize simulation" << std::endl;
         return false;
     }
-    
-    // Oddalona kamera dla lepszego widoku grid boxa (100x100x100)
-    // Pozycja wyżej i dalej, żeby zobaczyć cały grid
-    m_camera.setPosition(glm::vec3(0.0f, 80.0f, 250.0f));
-    m_camera.rotate(-90.0f, -15.0f); // Lekko w dół, żeby patrzeć na grid
-    m_camera.setNearFar(0.1f, 2000.0f); // Zwiększony far plane dla większych grid'ów
+    m_simulation.setSpawnerPosition(glm::vec3(0.f, -10.f, 0.f));
+
+    m_camera.setPosition(glm::vec3(0.0f, 8.0f, 25.0f));
+    m_camera.rotate(-90.0f, -15.0f);
+    m_camera.setNearFar(0.1f, 500.0f);
     
     return true;
 }
@@ -216,25 +215,17 @@ void Application::renderFrame() {
     // Renderuj scenę
     m_renderer.clear(0.1f, 0.1f, 0.15f, 1.0f);
     
-    // Renderuj przeszkody (konwersja do vec4: x, y, width, height)
-    std::vector<glm::vec4> obstaclesForRender;
-    for (const auto& obstacle : m_simulation.getObstacles()) {
-        obstaclesForRender.push_back(glm::vec4(
-            obstacle.position.x - obstacle.size.x * 0.5f,
-            obstacle.position.y - obstacle.size.y * 0.5f,
-            obstacle.size.x,
-            obstacle.size.y
-        ));
+    std::vector<ObstacleDesc> obstaclesForRender;
+    for (const auto& o : m_simulation.getObstacles()) {
+        obstaclesForRender.push_back({ o.position, o.size });
     }
     m_renderer.renderObstacles(obstaclesForRender);
 
     m_renderer.renderCampfire(m_simulation.getSpawnerPosition());
     
-    // Renderuj kontury grid'a
     m_renderer.renderGridWireframe(m_simulation.getGrid());
     
-    // Renderuj cząsteczki gazu
-    m_renderer.renderGasParticles(m_simulation.getGasParticles());
+    m_renderer.renderSmokeVolume(m_simulation);
     
     // Renderuj ImGui
     ImGui::Render();

@@ -13,8 +13,6 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
-  </ItemGroup>
-  <ItemGroup>
     <Filter Include="Source Files\Application">
       <UniqueIdentifier>{e5f6a7b8-c9d0-1234-ef01-234567890123}</UniqueIdentifier>
     </Filter>
@@ -24,6 +22,9 @@
     <Filter Include="Source Files\Simulation">
       <UniqueIdentifier>{b2c3d4e5-f6a7-8901-bcde-f12345678901}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Campfire">
+      <UniqueIdentifier>{e8a1b2c3-d4e5-6789-0abc-def123456789}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Header Files\Application">
       <UniqueIdentifier>{f6a7b8c9-d0e1-2345-f012-345678901234}</UniqueIdentifier>
     </Filter>
@@ -32,6 +33,12 @@
     </Filter>
     <Filter Include="Header Files\Simulation">
       <UniqueIdentifier>{d4e5f6a7-b8c9-0123-def0-234567890123}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Shaders">
+      <UniqueIdentifier>{a2b3c4d5-e6f7-8901-2345-67890abcdef1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Campfire">
+      <UniqueIdentifier>{b3c4d5e6-f7a8-9012-3456-7890abcdef12}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -47,8 +54,14 @@
     <ClCompile Include="src\Render\Shader.cpp">
       <Filter>Source Files\Render</Filter>
     </ClCompile>
+    <ClCompile Include="src\Render\GltfModel.cpp">
+      <Filter>Source Files\Render</Filter>
+    </ClCompile>
     <ClCompile Include="src\Render\Renderer.cpp">
       <Filter>Source Files\Render</Filter>
+    </ClCompile>
+    <ClCompile Include="Campfire\tiny_gltf.cc">
+      <Filter>Source Files\Campfire</Filter>
     </ClCompile>
     <ClCompile Include="src\Simulation\Grid.cpp">
       <Filter>Source Files\Simulation</Filter>
@@ -70,6 +83,9 @@
     <ClInclude Include="src\Render\Shader.h">
       <Filter>Header Files\Render</Filter>
     </ClInclude>
+    <ClInclude Include="src\Render\GltfModel.h">
+      <Filter>Header Files\Render</Filter>
+    </ClInclude>
     <ClInclude Include="src\Render\Renderer.h">
       <Filter>Header Files\Render</Filter>
     </ClInclude>
@@ -82,5 +98,46 @@
     <ClInclude Include="src\Simulation\ImGuiControls.h">
       <Filter>Header Files\Simulation</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="shaders\obstacle.vert">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="shaders\obstacle.frag">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="shaders\grid.vert">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="shaders\grid.frag">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="shaders\model.vert">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="shaders\model.frag">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="shaders\smoke_raymarch.vert">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="shaders\smoke_raymarch.frag">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="Campfire\campfire.glb">
+      <Filter>Campfire</Filter>
+    </None>
+    <None Include="Campfire\json.hpp">
+      <Filter>Campfire</Filter>
+    </None>
+    <None Include="Campfire\stb_image.h">
+      <Filter>Campfire</Filter>
+    </None>
+    <None Include="Campfire\stb_image_write.h">
+      <Filter>Campfire</Filter>
+    </None>
+    <None Include="Campfire\tiny_gltf.h">
+      <Filter>Campfire</Filter>
+    </None>
   </ItemGroup>
 </Project>

@@ -8,7 +8,7 @@
 
 class Shader;
 
-// Model GLTF/GLB – wiele części (wszystkie meshe/primitives), kolor z materiału.
+// Model GLTF/GLB – wiele części (meshe/primitives), tekstury z materiałów (baseColorTexture).
 class GltfModel {
 public:
     GltfModel() = default;
@@ -37,6 +37,7 @@ private:
         GLuint vbo{ 0 };
         GLuint ebo{ 0 };
         GLsizei indexCount{ 0 };
+        GLuint texture{ 0 };
         glm::vec3 baseColor{ 0.6f, 0.35f, 0.2f };
     };
 

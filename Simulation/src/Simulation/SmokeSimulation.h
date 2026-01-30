@@ -1,128 +1,102 @@
 #pragma once
 
-#include "../Render/Renderer.h"
 #include "Grid.h"
 #include <vector>
 #include <glm/glm.hpp>
 #include <basetsd.h>
-#include <glad/glad.h>
 
-// Przeszkoda (ściana) - w 3D
 struct Obstacle {
-    glm::vec3 position;   // Pozycja środka
-    glm::vec3 size;       // Rozmiar (szerokość, wysokość, głębokość)
+    glm::vec3 position;
+    glm::vec3 size;
 };
 
+// Symulacja dymu w stylu Bridsona (SIGGRAPH 2007): siatka Eulerowska,
+// semi-Lagrange adwekcja, buoyancy, pressure projection. Por. Seb Lague, fluids_notes.pdf.
 class SmokeSimulation {
 public:
     SmokeSimulation();
     ~SmokeSimulation();
 
-    // Inicjalizacja symulacji
-    bool initialize(const UINT32 &simulationWidth = 40, const UINT32 &simulationHeight = 40, const UINT32 &simulationDepth = 40, const float &cellSize = 1.0f);
-    
-    // Uruchomienie jednej iteracji symulacji
+    bool initialize(const UINT32& simulationWidth = 40, const UINT32& simulationHeight = 40,
+                    const UINT32& simulationDepth = 40, const float& cellSize = 1.0f);
+
     void run(float deltaTime);
-    
-    // Pobierz cząsteczki gazu
-    const std::vector<GasParticle>& getGasParticles() const { return m_gasParticles; }
-    
-    // Parametry symulacji
+
+    // Parametry
     float getAmbientPressure() const { return m_ambientPressure; }
-    void setAmbientPressure(const float &pressure) { m_ambientPressure = pressure; }
-    
-    float getParticleDensity() const { return m_particleDensity; }
-    void setParticleDensity(const float &density) { m_particleDensity = density; }
-    
+    void setAmbientPressure(float v) { m_ambientPressure = v; }
     float getGravity() const { return m_gravity; }
-    void setGravity(const float &gravity) { m_gravity = gravity; }
-
-    float getDampingFactor() const { return m_dampingFactor; }
-    void setDampingFactor(const float &factor) { m_dampingFactor = factor; }
-
+    void setGravity(float v) { m_gravity = v; }
     float getCellSize() const { return m_cellSize; }
-    void setCellSize(const float &size) { m_cellSize = std::max(0.01f, size); }
-    
-    // Time scale
+    void setCellSize(float v);
     float getTimeScale() const { return m_timeScale; }
-    void setTimeScale(const float &timeScale) { m_timeScale = std::max(0.0f, timeScale); }
-    
-    // Grid size
+    void setTimeScale(float v) { m_timeScale = std::max(0.0f, v); }
+    float getTempAmbient() const { return m_Tamb; }
+    void setTempAmbient(float v) { m_Tamb = v; }
+    float getBuoyancyAlpha() const { return m_buoyancyAlpha; }
+    void setBuoyancyAlpha(float v) { m_buoyancyAlpha = v; }
+    float getBuoyancyBeta() const { return m_buoyancyBeta; }
+    void setBuoyancyBeta(float v) { m_buoyancyBeta = v; }
+    float getDissipation() const { return m_dissipation; }
+    void setDissipation(float v) { m_dissipation = std::max(0.f, std::min(2.f, v)); }
+
     void setGridSize(int sizeX, int sizeY, int sizeZ);
     int getGridSizeX() const { return m_grid.getSizeX(); }
     int getGridSizeY() const { return m_grid.getSizeY(); }
     int getGridSizeZ() const { return m_grid.getSizeZ(); }
-    
-    // Spawner cząsteczek
+
     glm::vec3 getSpawnerPosition() const { return m_spawnerPosition; }
-    void setSpawnerPosition(const glm::vec3& position) { m_spawnerPosition = position; }
-    void spawnParticles(int count = 10);
-    
-    // Zarządzanie przeszkodami
-    void addObstacle(const Obstacle& obstacle);
-    void removeObstacle(size_t index);
-    const std::vector<Obstacle>& getObstacles() const { return m_obstacles; }
+    void setSpawnerPosition(const glm::vec3& p) { m_spawnerPosition = p; }
+
+    void addObstacle(const Obstacle& o);
+    void removeObstacle(size_t i);
     void clearObstacles();
-    
-    // Dodaj cząsteczki w określonym miejscu
-    void addParticlesAt(const glm::vec3& position, int count = 10);
-    
-    // Pobierz grid
+    const std::vector<Obstacle>& getObstacles() const { return m_obstacles; }
+
     const Grid& getGrid() const { return m_grid; }
 
+    // Siatka dymu dla renderera (raymarch 3D)
+    const float* getSmokeDensityData() const { return m_s.data(); }
+    int getSmokeNx() const { return m_nx; }
+    int getSmokeNy() const { return m_ny; }
+    int getSmokeNz() const { return m_nz; }
+    int getSmokeCellCount() const;
+
 private:
-    std::vector<GasParticle> m_gasParticles;
-    std::vector<Obstacle> m_obstacles;
     Grid m_grid;
-    
-    // Occupancy: płaski wektor [0..totalCells-1], EMPTY = wolna komórka (1 cząsteczka na pole)
-    static constexpr size_t OCCUPANCY_EMPTY = static_cast<size_t>(-1);
-    std::vector<size_t> m_gridOccupancyFlat;
-    int m_strideY{ 0 };   // sizeX
-    int m_strideZ{ 0 };   // sizeX * sizeY
-    int m_totalCells{ 0 };
-    
-    float m_ambientPressure;      // Globalne ciśnienie otoczenia [hPa]
-    float m_particleDensity;       // Gęstość cząsteczki gazu [g/cm^3]
-    float m_gravity;               // Grawitacja [m/s^2]
-    float m_timeScale;             // Modyfikator czasu (0.0 = zatrzymane, 1.0 = normalna prędkość, >1.0 = przyspieszone)
-    float m_dampingFactor;        // Tłumienie prędkości cząsteczek
-    float m_cellSize{ 1.0f };          // Rozmiar komórki grid'a
-    
-    int m_simulationWidth;
-    int m_simulationHeight;
-    int m_simulationDepth;
-    
-    glm::vec3 m_spawnerPosition;   // Pozycja spawnera cząsteczek
-    
-    // Fizyka
-    void updateParticles(float deltaTime);
-    void checkCollisions();
-    void applyParticleInteractions();
-    bool isPointInObstacle(const glm::vec3& point) const;
-    glm::vec3 getCollisionNormal(const glm::vec3& point, const Obstacle& obstacle) const;
-    
-    // Grid operations
-    int gridPosToKey(const glm::ivec3& gridPos) const;
-    glm::ivec3 keyToGridPos(int key) const;
-    bool canPlaceParticleAt(const glm::ivec3& gridPos) const;
-    void updateGridOccupancy();
-    glm::ivec3 findFreeNeighborCell(const glm::ivec3& gridPos, const glm::vec3& velocity) const; // Znajdź wolną komórkę obok
-    
-    // Generowanie początkowych cząsteczek
-    void generateInitialParticles();
+    std::vector<Obstacle> m_obstacles;
+    glm::vec3 m_spawnerPosition{ 0.f, -50.f, 0.f };
 
-    void updateGridStrides();
+    int m_nx{ 0 }, m_ny{ 0 }, m_nz{ 0 };
+    float m_cellSize{ 1.0f };
+    float m_ambientPressure{ 1013.25f };
+    float m_gravity{ 9.81f };
+    float m_timeScale{ 1.0f };
+    float m_Tamb{ 0.f };
+    float m_buoyancyAlpha{ 0.1f };
+    float m_buoyancyBeta{ 0.2f };
+    float m_dissipation{ 0.15f };
+    float m_injectRate{ 8.f };
+    int m_injectRadius{ 2 };
 
-    // GPU compute shader
-    GLuint m_computeProgram{ 0 };
-    GLuint m_particleSSBO{ 0 };
-    GLuint m_occupancySSBO{ 0 };
-    GLuint m_paramsUBO{ 0 };
-    bool m_useGPU{ true };
+    std::vector<float> m_u, m_v, m_w, m_p, m_s, m_T;
+    std::vector<float> m_uTmp, m_vTmp, m_wTmp, m_sTmp, m_TTmp, m_pTmp;
+    std::vector<uint8_t> m_solid;
 
-    bool initComputeBuffers();
-    void updateComputeBuffers();
-    void updateParticlesGPU(float deltaTime);
-    void cleanupComputeBuffers();
+    int flidx(int i, int j, int k) const { return i + j * m_nx + k * m_nx * m_ny; }
+    glm::vec3 cellCenter(int i, int j, int k) const;
+    bool isSolid(int i, int j, int k) const;
+    bool isPointInObstacle(const glm::vec3& p) const;
+
+    void buildSolidMask();
+    void allocFluid();
+    void runFluid(float dt);
+    void injectSmoke(float dt);
+    void dissipate(float dt);
+    void addBuoyancyGravity(float dt);
+    void advect(float dt);
+    void pressureSolve(int iterations);
+    void project();
+
+    float sampleTrilinear(const std::vector<float>& f, float cx, float cy, float cz) const;
 };

@@ -44,16 +44,6 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
         simulation.setAmbientPressure(1013.25f);
     }
     
-    // Particle density
-    float particleDensity = simulation.getParticleDensity();
-    if (ImGui::SliderFloat("[g/cm^3]", &particleDensity, 0.01f, 2.0f, "%.6f")) {
-        simulation.setParticleDensity(particleDensity);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Reset##Density")) {
-        simulation.setParticleDensity(1.0f);
-    }
-    
     // Gravity
     float gravity = simulation.getGravity();
     if (ImGui::SliderFloat("[m/s^2]", &gravity, -20.0f, 20.0f)) {
@@ -61,17 +51,8 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
     }
     ImGui::SameLine();
     if (ImGui::Button("Reset##Gravity")) {
-        simulation.setGravity(-9.81f);
+        simulation.setGravity(9.81f);
     }
-    float dampingFactor = simulation.getDampingFactor();
-    if (ImGui::SliderFloat("Damping", &dampingFactor, 0.0f, 1.0f)) {
-        simulation.setDampingFactor(dampingFactor);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Reset##Damping")) {
-        simulation.setDampingFactor(0.5f);
-    }
-
     // Cell size
     float cellSize = simulation.getCellSize();
     if (ImGui::SliderFloat("Cell Size", &cellSize, 0.01f, 5.0f)) {
@@ -113,19 +94,22 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
         simulation.setTimeScale(5.0f);
     }
     
-    // Particle spawner
+    // Źródło dymu (spawner / ognisko)
     ImGui::Separator();
     glm::vec3 spawnerPos = simulation.getSpawnerPosition();
     float spawnerPosArray[3] = { spawnerPos.x, spawnerPos.y, spawnerPos.z };
-    if (ImGui::InputFloat3("Spawner", spawnerPosArray)) {
+    if (ImGui::InputFloat3("Spawner (dym)", spawnerPosArray)) {
         simulation.setSpawnerPosition(glm::vec3(spawnerPosArray[0], spawnerPosArray[1], spawnerPosArray[2]));
     }
-    static int spawnCount = 10;
-    ImGui::InputInt("Count", &spawnCount);
-    if (ImGui::Button("Spawn")) {
-        simulation.spawnParticles(spawnCount);
-    }
-    
+    float Tamb = simulation.getTempAmbient();
+    if (ImGui::SliderFloat("T ambient", &Tamb, -50.f, 100.f)) simulation.setTempAmbient(Tamb);
+    float ba = simulation.getBuoyancyAlpha();
+    if (ImGui::SliderFloat("Buoyancy alpha", &ba, 0.f, 1.f)) simulation.setBuoyancyAlpha(ba);
+    float bb = simulation.getBuoyancyBeta();
+    if (ImGui::SliderFloat("Buoyancy beta", &bb, 0.f, 1.f)) simulation.setBuoyancyBeta(bb);
+    float diss = simulation.getDissipation();
+    if (ImGui::SliderFloat("Dissipation", &diss, 0.f, 2.f)) simulation.setDissipation(diss);
+
     // Obstacles
     ImGui::Separator();
     static float obstacleX = 0.0f;
@@ -198,13 +182,10 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
     
     // Statistics
     ImGui::Separator();
-    ImGui::Text("Particles: %zu", simulation.getGasParticles().size());
+    ImGui::Text("Cz\u0105steczki: %d", simulation.getSmokeCellCount());
+    ImGui::Text("Grid: %d x %d x %d", simulation.getGridSizeX(), simulation.getGridSizeY(), simulation.getGridSizeZ());
     ImGui::Text("Obstacles: %zu", obstacles.size());
-    
-    if (ImGui::Button("Add Particles")) {
-        simulation.addParticlesAt(glm::vec3(0.0f, 0.0f, 0.0f), 50);
-    }
-    
+
     ImGui::End();
 }
 
