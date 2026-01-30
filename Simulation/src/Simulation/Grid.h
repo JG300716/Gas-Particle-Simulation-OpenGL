@@ -7,13 +7,12 @@
 // Struktura reprezentująca grid 3D
 class Grid {
 public:
-    Grid(int sizeX, int sizeY, int sizeZ, float cellSize = 1.0f);
+    Grid(int sizeX, int sizeY, int sizeZ);
     
     // Pobierz rozmiary grid'a
     int getSizeX() const { return m_sizeX; }
     int getSizeY() const { return m_sizeY; }
     int getSizeZ() const { return m_sizeZ; }
-    float getCellSize() const { return m_cellSize; }
     
     // Konwersja pozycji świata na indeksy grid'a
     glm::ivec3 worldToGrid(const glm::vec3& worldPos) const;
@@ -34,7 +33,6 @@ public:
 
 private:
     int m_sizeX, m_sizeY, m_sizeZ;
-    float m_cellSize;
     glm::vec3 m_minBounds;
     glm::vec3 m_maxBounds;
     glm::vec3 m_center;

@@ -33,7 +33,12 @@ private:
     // Performance tracking
     float m_lastFrameTime;
     float m_lastRenderTime;
-    
+
+    bool m_showTempMode{ false };
+    bool m_campfireWireframe{ false };
+    int m_prevF1{ GLFW_RELEASE };
+    int m_prevF2{ GLFW_RELEASE };
+
     // Kontrola kamery
     bool m_firstMouse;
     float m_lastMouseX;

@@ -1,5 +1,6 @@
 #include "ImGuiControls.h"
 #include <iostream>
+#include <string>
 
 void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camera) {
     ImGui::Begin("Controls");
@@ -51,18 +52,9 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
     }
     ImGui::SameLine();
     if (ImGui::Button("Reset##Gravity")) {
-        simulation.setGravity(9.81f);
+        simulation.setGravity(-9.81f);
     }
-    // Cell size
-    float cellSize = simulation.getCellSize();
-    if (ImGui::SliderFloat("Cell Size", &cellSize, 0.01f, 5.0f)) {
-        simulation.setCellSize(cellSize);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Reset##CellSize")) {
-        simulation.setCellSize(1.0f);
-    }
-    
+
     // Time scale
     ImGui::Separator();
     float timeScale = simulation.getTimeScale();
@@ -102,13 +94,43 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
         simulation.setSpawnerPosition(glm::vec3(spawnerPosArray[0], spawnerPosArray[1], spawnerPosArray[2]));
     }
     float Tamb = simulation.getTempAmbient();
-    if (ImGui::SliderFloat("T ambient", &Tamb, -50.f, 100.f)) simulation.setTempAmbient(Tamb);
+    if (ImGui::SliderFloat("T ambient (room)", &Tamb, -50.f, 100.f)) simulation.setTempAmbient(Tamb);
+    float tcool = simulation.getTempCooling();
+    if (ImGui::SliderFloat("Temp cooling/tick", &tcool, 0.f, 2.f)) simulation.setTempCooling(tcool);
+    float diff = simulation.getDiffusion();
+    if (ImGui::SliderFloat("Diffusion", &diff, 0.f, 10.f)) simulation.setDiffusion(diff);
+    float injRate = simulation.getInjectRate();
+    if (ImGui::SliderFloat("Inject rate", &injRate, 0.f, 50.f)) simulation.setInjectRate(injRate);
+    bool injectCyl = simulation.getInjectCylinder();
+    if (ImGui::Checkbox("Inject cylinder (else sphere)", &injectCyl)) simulation.setInjectCylinder(injectCyl);
     float ba = simulation.getBuoyancyAlpha();
-    if (ImGui::SliderFloat("Buoyancy alpha", &ba, 0.f, 1.f)) simulation.setBuoyancyAlpha(ba);
+    if (ImGui::SliderFloat("Buoyancy alpha (smoke weight)", &ba, 0.f, 0.5f)) simulation.setBuoyancyAlpha(ba);
     float bb = simulation.getBuoyancyBeta();
-    if (ImGui::SliderFloat("Buoyancy beta", &bb, 0.f, 1.f)) simulation.setBuoyancyBeta(bb);
-    float diss = simulation.getDissipation();
-    if (ImGui::SliderFloat("Dissipation", &diss, 0.f, 2.f)) simulation.setDissipation(diss);
+    if (ImGui::SliderFloat("Buoyancy beta (temp lift)", &bb, 0.f, 2.f)) simulation.setBuoyancyBeta(bb);
+
+    // Sufit z dziurą
+    ImGui::Separator();
+    ImGui::Text("Ceiling (wall with hole)");
+    WallWithHole& ceiling = simulation.getCeiling();
+    bool ceilEnabled = ceiling.enabled;
+    if (ImGui::Checkbox("Ceiling enabled", &ceilEnabled)) {
+        simulation.setCeilingEnabled(ceilEnabled);
+    }
+    if (ceiling.enabled) {
+        float holeCenter[2] = { ceiling.holeCenter.x, ceiling.holeCenter.y };
+        if (ImGui::SliderFloat2("Hole center (X,Z)", holeCenter, -ceiling.width * 0.5f, ceiling.width * 0.5f)) {
+            simulation.setCeilingHole(glm::vec2(holeCenter[0], holeCenter[1]), ceiling.holeSize);
+        }
+        float holeSize[2] = { ceiling.holeSize.x, ceiling.holeSize.y };
+        if (ImGui::SliderFloat2("Hole size (W,D)", holeSize, 0.f, std::min(ceiling.width, ceiling.depth))) {
+            simulation.setCeilingHole(ceiling.holeCenter, glm::vec2(holeSize[0], holeSize[1]));
+        }
+        float ceilY = ceiling.position.y;
+        if (ImGui::SliderFloat("Ceiling Y", &ceilY, simulation.getGrid().getMinBounds().y, simulation.getGrid().getMaxBounds().y)) {
+            ceiling.position.y = ceilY;
+            simulation.updateCeiling();
+        }
+    }
 
     // Obstacles
     ImGui::Separator();
@@ -137,21 +159,52 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
         Obstacle obstacle;
         obstacle.position = glm::vec3(obstacleX, obstacleY, obstacleZ);
         obstacle.size = glm::vec3(obstacleWidth, obstacleHeight, obstacleDepth);
+        obstacle.rotation = glm::vec3(0.f, 0.f, 0.f);
+        obstacle.scale = glm::vec3(1.f, 1.f, 1.f);
         simulation.addObstacle(obstacle);
     }
-    
+
+    static int selectedObstacle = -1;
     const auto& obstacles = simulation.getObstacles();
     if (!obstacles.empty()) {
         for (size_t i = 0; i < obstacles.size(); ++i) {
             ImGui::PushID(static_cast<int>(i));
-            ImGui::Text("%zu: (%.1f,%.1f,%.1f)", i, obstacles[i].position.x, obstacles[i].position.y, obstacles[i].position.z);
+            bool selected = (selectedObstacle == static_cast<int>(i));
+            if (ImGui::Selectable(("Obstacle " + std::to_string(i) + "##sel").c_str(), selected))
+                selectedObstacle = selected ? -1 : static_cast<int>(i);
             ImGui::SameLine();
             if (ImGui::Button("X")) {
+                if (static_cast<int>(i) == selectedObstacle) selectedObstacle = -1;
+                else if (i < static_cast<size_t>(selectedObstacle)) --selectedObstacle;
                 simulation.removeObstacle(i);
             }
             ImGui::PopID();
         }
+        if (selectedObstacle >= 0 && selectedObstacle < static_cast<int>(obstacles.size())) {
+            Obstacle o = obstacles[selectedObstacle];
+            float pos[3] = { o.position.x, o.position.y, o.position.z };
+            if (ImGui::InputFloat3("Transform Position", pos)) {
+                o.position = glm::vec3(pos[0], pos[1], pos[2]);
+                simulation.updateObstacle(selectedObstacle, o);
+            }
+            float rot[3] = { o.rotation.x, o.rotation.y, o.rotation.z };
+            if (ImGui::InputFloat3("Transform Rotation (deg)", rot)) {
+                o.rotation = glm::vec3(rot[0], rot[1], rot[2]);
+                simulation.updateObstacle(selectedObstacle, o);
+            }
+            float scl[3] = { o.scale.x, o.scale.y, o.scale.z };
+            if (ImGui::InputFloat3("Transform Scale", scl)) {
+                o.scale = glm::vec3(std::max(0.01f, scl[0]), std::max(0.01f, scl[1]), std::max(0.01f, scl[2]));
+                simulation.updateObstacle(selectedObstacle, o);
+            }
+            float sz[3] = { o.size.x, o.size.y, o.size.z };
+            if (ImGui::InputFloat3("Size (half-extents)", sz)) {
+                o.size = glm::vec3(std::max(0.01f, sz[0]), std::max(0.01f, sz[1]), std::max(0.01f, sz[2]));
+                simulation.updateObstacle(selectedObstacle, o);
+            }
+        }
         if (ImGui::Button("Clear")) {
+            selectedObstacle = -1;
             simulation.clearObstacles();
         }
     }

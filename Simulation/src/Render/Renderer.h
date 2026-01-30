@@ -12,6 +12,8 @@ class SmokeSimulation;
 struct ObstacleDesc {
     glm::vec3 position;
     glm::vec3 size;
+    glm::vec3 rotation;
+    glm::vec3 scale;
 };
 
 class Renderer {
@@ -21,7 +23,7 @@ public:
 
     bool initialize(int windowWidth, int windowHeight);
 
-    void renderSmokeVolume(const SmokeSimulation& sim);
+    void renderSmokeVolume(const SmokeSimulation& sim, bool showTempMode = false);
     void renderObstacles(const std::vector<ObstacleDesc>& obstacles);
     void renderGridWireframe(const Grid& grid);
 
@@ -30,7 +32,7 @@ public:
     void clear(float r = 0.1f, float g = 0.1f, float b = 0.1f, float a = 1.0f);
 
     bool loadCampfire(const std::string& path);
-    void renderCampfire(const glm::vec3& position) const;
+    void renderCampfire(const glm::vec3& position, bool wireframe = false) const;
 
     static std::string findCampfirePath();
 
@@ -47,6 +49,7 @@ private:
     GLuint m_gridVBO;
     GLuint m_smokeVAO;
     GLuint m_smoke3D;
+    GLuint m_smoke3DTemp;
 
     glm::mat4 m_projection;
     glm::mat4 m_view;

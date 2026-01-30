@@ -2,11 +2,13 @@
 #include "../Simulation/Grid.h"
 #include "../Simulation/SmokeSimulation.h"
 #include <glm/gtc/matrix_transform.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/euler_angles.hpp>
 #include <iostream>
 #include <filesystem>
 
 Renderer::Renderer() : m_initialized(false), m_obstacleVAO(0), m_obstacleVBO(0),
-                       m_gridVAO(0), m_gridVBO(0), m_smokeVAO(0), m_smoke3D(0) {
+                       m_gridVAO(0), m_gridVBO(0), m_smokeVAO(0), m_smoke3D(0), m_smoke3DTemp(0) {
     m_projection = glm::mat4(1.0f);
     m_view = glm::mat4(1.0f);
 }
@@ -18,6 +20,7 @@ Renderer::~Renderer() {
     if (m_gridVBO != 0) glDeleteBuffers(1, &m_gridVBO);
     if (m_smokeVAO != 0) glDeleteVertexArrays(1, &m_smokeVAO);
     if (m_smoke3D != 0) glDeleteTextures(1, &m_smoke3D);
+    if (m_smoke3DTemp != 0) glDeleteTextures(1, &m_smoke3DTemp);
 }
 
 bool Renderer::initialize(int windowWidth, int windowHeight) {
@@ -127,7 +130,7 @@ void Renderer::initSmokeVolume() {
     glDeleteBuffers(1, &vbo);
 }
 
-void Renderer::renderSmokeVolume(const SmokeSimulation& sim) {
+void Renderer::renderSmokeVolume(const SmokeSimulation& sim, bool showTempMode) {
     if (!m_initialized) return;
     int nx = sim.getSmokeNx(), ny = sim.getSmokeNy(), nz = sim.getSmokeNz();
     if (nx <= 0 || ny <= 0 || nz <= 0) return;
@@ -137,9 +140,7 @@ void Renderer::renderSmokeVolume(const SmokeSimulation& sim) {
     glm::vec3 vmin = sim.getGrid().getMinBounds();
     glm::vec3 vmax = sim.getGrid().getMaxBounds();
 
-    if (m_smoke3D == 0) {
-        glGenTextures(1, &m_smoke3D);
-    }
+    if (m_smoke3D == 0) glGenTextures(1, &m_smoke3D);
     glBindTexture(GL_TEXTURE_3D, m_smoke3D);
     glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -148,6 +149,21 @@ void Renderer::renderSmokeVolume(const SmokeSimulation& sim) {
     glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
     glTexImage3D(GL_TEXTURE_3D, 0, GL_R32F, nx, ny, nz, 0, GL_RED, GL_FLOAT, density);
     glBindTexture(GL_TEXTURE_3D, 0);
+
+    if (showTempMode) {
+        const float* temp = sim.getSmokeTemperatureData();
+        if (temp) {
+            if (m_smoke3DTemp == 0) glGenTextures(1, &m_smoke3DTemp);
+            glBindTexture(GL_TEXTURE_3D, m_smoke3DTemp);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+            glTexImage3D(GL_TEXTURE_3D, 0, GL_R32F, nx, ny, nz, 0, GL_RED, GL_FLOAT, temp);
+            glBindTexture(GL_TEXTURE_3D, 0);
+        }
+    }
 
     glm::mat4 viewProj = m_projection * m_view;
     glm::mat4 invViewProj = glm::inverse(viewProj);
@@ -160,9 +176,21 @@ void Renderer::renderSmokeVolume(const SmokeSimulation& sim) {
     m_smokeShader.setVec3("uVolumeMin", vmin);
     m_smokeShader.setVec3("uVolumeMax", vmax);
     m_smokeShader.setInt("uDensity", 0);
+    m_smokeShader.setBool("uShowTemp", showTempMode);
+    if (showTempMode) {
+        m_smokeShader.setInt("uTemperature", 1);
+        float tMin = sim.getTempAmbient();
+        float tMax = tMin + 80.f;
+        m_smokeShader.setFloat("uTempMin", tMin);
+        m_smokeShader.setFloat("uTempMax", tMax);
+    }
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_3D, m_smoke3D);
+    if (showTempMode && m_smoke3DTemp != 0) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_3D, m_smoke3DTemp);
+    }
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -172,6 +200,12 @@ void Renderer::renderSmokeVolume(const SmokeSimulation& sim) {
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
+    glBindTexture(GL_TEXTURE_3D, 0);
+    if (showTempMode && m_smoke3DTemp != 0) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_3D, 0);
+    }
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_3D, 0);
 }
 
@@ -186,20 +220,28 @@ void Renderer::renderObstacles(const std::vector<ObstacleDesc>& obstacles) {
     vertices.reserve(36 * obstacles.size());
 
     for (const auto& o : obstacles) {
-        glm::vec3 h = o.size * 0.5f;
-        float x0 = o.position.x - h.x, x1 = o.position.x + h.x;
-        float y0 = o.position.y - h.y, y1 = o.position.y + h.y;
-        float z0 = o.position.z - h.z, z1 = o.position.z + h.z;
-        // 6 faces, 2 tri each, CCW outward: -Z back, +Z front, -X left, +X right, -Y bottom, +Y top
-        float box[] = {
-            x0, y0, z1, x1, y0, z1, x1, y1, z1,   x0, y0, z1, x1, y1, z1, x0, y1, z1,
-            x1, y0, z0, x0, y0, z0, x0, y1, z0,   x1, y0, z0, x0, y1, z0, x1, y1, z0,
-            x0, y1, z1, x1, y1, z1, x1, y1, z0,   x0, y1, z1, x1, y1, z0, x0, y1, z0,
-            x0, y0, z0, x1, y0, z0, x1, y0, z1,   x0, y0, z0, x1, y0, z1, x0, y0, z1,
-            x0, y0, z0, x0, y1, z0, x0, y1, z1,   x0, y0, z0, x0, y1, z1, x0, y0, z1,
-            x1, y0, z1, x1, y1, z1, x1, y1, z0,   x1, y0, z1, x1, y1, z0, x1, y0, z0
+        glm::vec3 h = o.size * 0.5f * o.scale;
+        glm::mat4 R = glm::eulerAngleXYZ(
+            glm::radians(o.rotation.x), glm::radians(o.rotation.y), glm::radians(o.rotation.z));
+        glm::vec3 c[8] = {
+            o.position + glm::vec3(R * glm::vec4(-h.x, -h.y, -h.z, 0.f)),
+            o.position + glm::vec3(R * glm::vec4( h.x, -h.y, -h.z, 0.f)),
+            o.position + glm::vec3(R * glm::vec4( h.x,  h.y, -h.z, 0.f)),
+            o.position + glm::vec3(R * glm::vec4(-h.x,  h.y, -h.z, 0.f)),
+            o.position + glm::vec3(R * glm::vec4(-h.x, -h.y,  h.z, 0.f)),
+            o.position + glm::vec3(R * glm::vec4( h.x, -h.y,  h.z, 0.f)),
+            o.position + glm::vec3(R * glm::vec4( h.x,  h.y,  h.z, 0.f)),
+            o.position + glm::vec3(R * glm::vec4(-h.x,  h.y,  h.z, 0.f))
         };
-        for (int i = 0; i < 36; ++i) vertices.push_back(box[i]);
+        auto push = [&vertices](const glm::vec3& v) {
+            vertices.push_back(v.x); vertices.push_back(v.y); vertices.push_back(v.z);
+        };
+        push(c[4]); push(c[5]); push(c[6]); push(c[4]); push(c[6]); push(c[7]);
+        push(c[1]); push(c[0]); push(c[3]); push(c[1]); push(c[3]); push(c[2]);
+        push(c[3]); push(c[2]); push(c[6]); push(c[3]); push(c[6]); push(c[7]);
+        push(c[0]); push(c[1]); push(c[5]); push(c[0]); push(c[5]); push(c[4]);
+        push(c[0]); push(c[3]); push(c[7]); push(c[0]); push(c[7]); push(c[4]);
+        push(c[1]); push(c[2]); push(c[6]); push(c[1]); push(c[6]); push(c[5]);
     }
 
     glBindVertexArray(m_obstacleVAO);
@@ -283,8 +325,9 @@ bool Renderer::loadCampfire(const std::string& path) {
     return m_campfire.loadFromFile(path);
 }
 
-void Renderer::renderCampfire(const glm::vec3& position) const {
+void Renderer::renderCampfire(const glm::vec3& position, bool wireframe) const {
     if (!m_initialized || !m_campfire.isLoaded()) return;
+    if (wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     m_modelShader.use();
     m_modelShader.setMat4("uProjection", m_projection);
     m_modelShader.setMat4("uView", m_view);
@@ -293,4 +336,5 @@ void Renderer::renderCampfire(const glm::vec3& position) const {
     model = model * glm::scale(glm::mat4(1.0f), glm::vec3(2.f));
     m_modelShader.setMat4("uModel", model);
     m_campfire.draw(&m_modelShader);
+    if (wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }

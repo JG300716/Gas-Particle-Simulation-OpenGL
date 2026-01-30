@@ -1,33 +1,31 @@
 #include "Grid.h"
 #include <algorithm>
+#include <cmath>
 
-Grid::Grid(int sizeX, int sizeY, int sizeZ, float cellSize)
-    : m_sizeX(sizeX), m_sizeY(sizeY), m_sizeZ(sizeZ), m_cellSize(cellSize) {
-    
-    // Oblicz granice grid'a (centrowany wokół (0,0,0))
-    float halfWidth = (m_sizeX * m_cellSize) / 2.0f;
-    float halfHeight = (m_sizeY * m_cellSize) / 2.0f;
-    float halfDepth = (m_sizeZ * m_cellSize) / 2.0f;
-    
-    m_minBounds = glm::vec3(-halfWidth, -halfHeight, -halfDepth);
-    m_maxBounds = glm::vec3(halfWidth, halfHeight, halfDepth);
+Grid::Grid(int sizeX, int sizeY, int sizeZ)
+    : m_sizeX(sizeX), m_sizeY(sizeY), m_sizeZ(sizeZ) {
+    // Granice grid'a zdefiniowane przez XYZ (centrowany wokół (0,0,0))
+    float hx = m_sizeX * 0.5f;
+    float hy = m_sizeY * 0.5f;
+    float hz = m_sizeZ * 0.5f;
+    m_minBounds = glm::vec3(-hx, -hy, -hz);
+    m_maxBounds = glm::vec3(hx, hy, hz);
     m_center = glm::vec3(0.0f, 0.0f, 0.0f);
 }
 
 glm::ivec3 Grid::worldToGrid(const glm::vec3& worldPos) const {
     glm::vec3 localPos = worldPos - m_minBounds;
-    int x = static_cast<int>(localPos.x / m_cellSize);
-    int y = static_cast<int>(localPos.y / m_cellSize);
-    int z = static_cast<int>(localPos.z / m_cellSize);
-    
+    int x = static_cast<int>(std::floor(localPos.x));
+    int y = static_cast<int>(std::floor(localPos.y));
+    int z = static_cast<int>(std::floor(localPos.z));
     return glm::ivec3(x, y, z);
 }
 
 glm::vec3 Grid::gridToWorld(const glm::ivec3& gridPos) const {
     glm::vec3 localPos(
-        gridPos.x * m_cellSize + m_cellSize * 0.5f,
-        gridPos.y * m_cellSize + m_cellSize * 0.5f,
-        gridPos.z * m_cellSize + m_cellSize * 0.5f
+        static_cast<float>(gridPos.x) + 0.5f,
+        static_cast<float>(gridPos.y) + 0.5f,
+        static_cast<float>(gridPos.z) + 0.5f
     );
     return m_minBounds + localPos;
 }

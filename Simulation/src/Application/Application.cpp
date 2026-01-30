@@ -1,4 +1,5 @@
 #include "Application.h"
+#include "../Simulation/Logger.h"
 #include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -29,7 +30,9 @@ Application::~Application() {
 bool Application::Initialize(int windowWidth, int windowHeight, const char* windowTitle) {
     m_windowWidth = windowWidth;
     m_windowHeight = windowHeight;
-    
+
+    Logger::init("");
+
     // Inicjalizacja GLFW
     if (!initializeGLFW()) {
         return false;
@@ -139,7 +142,7 @@ bool Application::initializeSimulation() {
         return false;
     }
     
-    if (!m_simulation.initialize(20, 20, 20, 1.0f)) {
+    if (!m_simulation.initialize(20, 20, 20)) {
         std::cerr << "Failed to initialize simulation" << std::endl;
         return false;
     }
@@ -217,15 +220,15 @@ void Application::renderFrame() {
     
     std::vector<ObstacleDesc> obstaclesForRender;
     for (const auto& o : m_simulation.getObstacles()) {
-        obstaclesForRender.push_back({ o.position, o.size });
+        obstaclesForRender.push_back({ o.position, o.size, o.rotation, o.scale });
     }
     m_renderer.renderObstacles(obstaclesForRender);
 
-    m_renderer.renderCampfire(m_simulation.getSpawnerPosition());
-    
+    m_renderer.renderCampfire(m_simulation.getSpawnerPosition(), m_campfireWireframe);
+
     m_renderer.renderGridWireframe(m_simulation.getGrid());
-    
-    m_renderer.renderSmokeVolume(m_simulation);
+
+    m_renderer.renderSmokeVolume(m_simulation, m_showTempMode);
     
     // Renderuj ImGui
     ImGui::Render();
@@ -236,7 +239,9 @@ void Application::Clean() {
     if (!m_initialized) {
         return;
     }
-    
+
+    Logger::shutdown();
+
     // Cleanup ImGui
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -306,6 +311,13 @@ void Application::scroll_callback(GLFWwindow* window, double xoffset, double yof
 }
 
 void Application::processInput(float deltaTime) {
+    int f1 = glfwGetKey(m_window, GLFW_KEY_F1);
+    int f2 = glfwGetKey(m_window, GLFW_KEY_F2);
+    if (f1 == GLFW_PRESS && m_prevF1 != GLFW_PRESS) m_campfireWireframe = !m_campfireWireframe;
+    if (f2 == GLFW_PRESS && m_prevF2 != GLFW_PRESS) m_showTempMode = !m_showTempMode;
+    m_prevF1 = f1;
+    m_prevF2 = f2;
+
     if (glfwGetKey(m_window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
         // Przełącz tryb kursora
         int mode = glfwGetInputMode(m_window, GLFW_CURSOR);
