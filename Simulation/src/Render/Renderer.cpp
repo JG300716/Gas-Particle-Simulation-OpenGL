@@ -6,9 +6,27 @@
 #include <glm/gtx/euler_angles.hpp>
 #include <iostream>
 #include <filesystem>
+#include <cmath>
+
+// === LightSettings implementation ===
+glm::vec3 LightSettings::getDirection() const {
+    // Kierunek OD powierzchni DO światła (dla obliczeń Lamberta)
+    return glm::normalize(getPosition());
+}
+
+glm::vec3 LightSettings::getPosition() const {
+    // Sferyczne współrzędne -> kartezjańskie
+    float yawRad = glm::radians(yaw);
+    float pitchRad = glm::radians(pitch);
+    float x = distance * cos(pitchRad) * sin(yawRad);
+    float y = distance * sin(pitchRad);
+    float z = distance * cos(pitchRad) * cos(yawRad);
+    return glm::vec3(x, y, z);
+}
 
 Renderer::Renderer() : m_initialized(false), m_obstacleVAO(0), m_obstacleVBO(0),
-                       m_gridVAO(0), m_gridVBO(0), m_smokeVAO(0), m_smoke3D(0), m_smoke3DTemp(0) {
+                       m_gridVAO(0), m_gridVBO(0), m_smokeVAO(0), m_smoke3D(0), m_smoke3DTemp(0),
+                       m_sphereVAO(0), m_sphereVBO(0), m_sphereEBO(0), m_sphereIndexCount(0) {
     m_projection = glm::mat4(1.0f);
     m_view = glm::mat4(1.0f);
 }
@@ -21,6 +39,9 @@ Renderer::~Renderer() {
     if (m_smokeVAO != 0) glDeleteVertexArrays(1, &m_smokeVAO);
     if (m_smoke3D != 0) glDeleteTextures(1, &m_smoke3D);
     if (m_smoke3DTemp != 0) glDeleteTextures(1, &m_smoke3DTemp);
+    if (m_sphereVAO != 0) glDeleteVertexArrays(1, &m_sphereVAO);
+    if (m_sphereVBO != 0) glDeleteBuffers(1, &m_sphereVBO);
+    if (m_sphereEBO != 0) glDeleteBuffers(1, &m_sphereEBO);
 }
 
 bool Renderer::initialize(int windowWidth, int windowHeight) {
@@ -89,6 +110,7 @@ bool Renderer::initialize(int windowWidth, int windowHeight) {
     initObstacleBuffers();
     initGridBuffers();
     initSmokeVolume();
+    initSphereBuffers();
 
     std::string campfirePath = findCampfirePath();
     if (!campfirePath.empty() && loadCampfire(campfirePath))
@@ -209,12 +231,88 @@ void Renderer::renderSmokeVolume(const SmokeSimulation& sim, bool showTempMode) 
     glBindTexture(GL_TEXTURE_3D, 0);
 }
 
+void Renderer::initSphereBuffers() {
+    const int stacks = 16;
+    const int slices = 16;
+    const float radius = 0.5f;
+    
+    std::vector<float> vertices;
+    std::vector<unsigned int> indices;
+    
+    // Generuj wierzchołki sfery
+    for (int i = 0; i <= stacks; ++i) {
+        float phi = glm::pi<float>() * float(i) / float(stacks);
+        for (int j = 0; j <= slices; ++j) {
+            float theta = 2.0f * glm::pi<float>() * float(j) / float(slices);
+            float x = radius * sin(phi) * cos(theta);
+            float y = radius * cos(phi);
+            float z = radius * sin(phi) * sin(theta);
+            vertices.push_back(x);
+            vertices.push_back(y);
+            vertices.push_back(z);
+        }
+    }
+    
+    // Generuj indeksy
+    for (int i = 0; i < stacks; ++i) {
+        for (int j = 0; j < slices; ++j) {
+            int first = i * (slices + 1) + j;
+            int second = first + slices + 1;
+            indices.push_back(first);
+            indices.push_back(second);
+            indices.push_back(first + 1);
+            indices.push_back(second);
+            indices.push_back(second + 1);
+            indices.push_back(first + 1);
+        }
+    }
+    
+    m_sphereIndexCount = static_cast<int>(indices.size());
+    
+    glGenVertexArrays(1, &m_sphereVAO);
+    glGenBuffers(1, &m_sphereVBO);
+    glGenBuffers(1, &m_sphereEBO);
+    
+    glBindVertexArray(m_sphereVAO);
+    
+    glBindBuffer(GL_ARRAY_BUFFER, m_sphereVBO);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+    
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_sphereEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+    
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    
+    glBindVertexArray(0);
+}
+
+void Renderer::renderLightIndicator() {
+    if (!m_initialized || !m_light.showIndicator) return;
+    
+    glm::vec3 lightPos = m_light.getPosition();
+    
+    // Przygotuj macierz modelu dla sfery
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), lightPos);
+    model = glm::scale(model, glm::vec3(1.0f)); // rozmiar sfery
+    
+    m_obstacleShader.use();
+    m_obstacleShader.setMat4("uProjection", m_projection);
+    m_obstacleShader.setMat4("uView", m_view * model);
+    m_obstacleShader.setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f)); // żółty kolor
+    
+    glBindVertexArray(m_sphereVAO);
+    glDrawElements(GL_TRIANGLES, m_sphereIndexCount, GL_UNSIGNED_INT, 0);
+    glBindVertexArray(0);
+}
+
 void Renderer::renderObstacles(const std::vector<ObstacleDesc>& obstacles) {
     if (!m_initialized || obstacles.empty()) return;
 
     m_obstacleShader.use();
     m_obstacleShader.setMat4("uProjection", m_projection);
     m_obstacleShader.setMat4("uView", m_view);
+    m_obstacleShader.setVec3("uColor", glm::vec3(0.5f, 0.5f, 0.5f)); // szary kolor dla przeszkód
 
     std::vector<float> vertices;
     vertices.reserve(36 * obstacles.size());
@@ -331,6 +429,7 @@ void Renderer::renderCampfire(const glm::vec3& position, bool wireframe) const {
     m_modelShader.use();
     m_modelShader.setMat4("uProjection", m_projection);
     m_modelShader.setMat4("uView", m_view);
+    m_modelShader.setVec3("uLightDir", m_light.getDirection()); // przekaż kierunek światła
     glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
     model = model * glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
     model = model * glm::scale(glm::mat4(1.0f), glm::vec3(2.f));

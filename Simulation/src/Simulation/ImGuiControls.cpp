@@ -1,8 +1,10 @@
 #include "ImGuiControls.h"
+#include "../Application/Application.h"
 #include <iostream>
 #include <string>
+#include <cmath>
 
-void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camera) {
+void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camera, Renderer& renderer, Application* app) {
     ImGui::Begin("Controls");
     ImGui::SetWindowPos(ImVec2(5, 5), ImGuiCond_FirstUseEver);
     
@@ -93,20 +95,52 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
     if (ImGui::InputFloat3("Spawner (dym)", spawnerPosArray)) {
         simulation.setSpawnerPosition(glm::vec3(spawnerPosArray[0], spawnerPosArray[1], spawnerPosArray[2]));
     }
-    float Tamb = simulation.getTempAmbient();
-    if (ImGui::SliderFloat("T ambient (room)", &Tamb, -50.f, 100.f)) simulation.setTempAmbient(Tamb);
-    float tcool = simulation.getTempCooling();
-    if (ImGui::SliderFloat("Temp cooling/tick", &tcool, 0.f, 2.f)) simulation.setTempCooling(tcool);
-    float diff = simulation.getDiffusion();
-    if (ImGui::SliderFloat("Diffusion", &diff, 0.f, 10.f)) simulation.setDiffusion(diff);
+    // Parametry wstrzykiwania
+    ImGui::Text("Smoke Injection:");
     float injRate = simulation.getInjectRate();
-    if (ImGui::SliderFloat("Inject rate", &injRate, 0.f, 50.f)) simulation.setInjectRate(injRate);
+    if (ImGui::SliderFloat("Inject rate", &injRate, 0.f, 30.f)) simulation.setInjectRate(injRate);
+    float injVel = simulation.getInjectVelocity();
+    if (ImGui::SliderFloat("Inject velocity", &injVel, 0.f, 15.f)) simulation.setInjectVelocity(injVel);
     bool injectCyl = simulation.getInjectCylinder();
-    if (ImGui::Checkbox("Inject cylinder (else sphere)", &injectCyl)) simulation.setInjectCylinder(injectCyl);
+    if (ImGui::Checkbox("Cylinder shape", &injectCyl)) simulation.setInjectCylinder(injectCyl);
+    
+    if (ImGui::Button("Clear Smoke")) {
+        simulation.clearSmoke();
+    }
+    
+    // Parametry termiczne
+    ImGui::Separator();
+    ImGui::Text("Thermal:");
+    float Tamb = simulation.getTempAmbient();
+    if (ImGui::SliderFloat("T ambient", &Tamb, -50.f, 100.f)) simulation.setTempAmbient(Tamb);
+    float tcool = simulation.getTempCooling();
+    if (ImGui::SliderFloat("Cooling rate", &tcool, 0.f, 2.f)) simulation.setTempCooling(tcool);
+    float rhoAir = simulation.getAirDensity();
+    if (ImGui::InputFloat("Air density [g/m³]", &rhoAir, 10.f, 50.f)) simulation.setAirDensity(rhoAir);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("G\u0119sto\u015b\u0107 powietrza (np. ~1200)");
+    float rhoSmoke = simulation.getSmokeParticleDensity();
+    if (ImGui::InputFloat("Smoke density [g/m³]", &rhoSmoke, 10.f, 50.f)) simulation.setSmokeParticleDensity(rhoSmoke);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("G\u0119sto\u015b\u0107 cz\u0105steczek dymu; mniejsza ni\u017c powietrze = unosi si\u0119");
     float ba = simulation.getBuoyancyAlpha();
-    if (ImGui::SliderFloat("Buoyancy alpha (smoke weight)", &ba, 0.f, 0.5f)) simulation.setBuoyancyAlpha(ba);
+    if (ImGui::SliderFloat("Buoyancy scale", &ba, 0.f, 2.0f)) simulation.setBuoyancyAlpha(ba);
     float bb = simulation.getBuoyancyBeta();
-    if (ImGui::SliderFloat("Buoyancy beta (temp lift)", &bb, 0.f, 2.f)) simulation.setBuoyancyBeta(bb);
+    if (ImGui::SliderFloat("Thermal lift", &bb, 0.f, 3.f)) simulation.setBuoyancyBeta(bb);
+    
+    // Parametry ruchu
+    ImGui::Separator();
+    ImGui::Text("Motion:");
+    float diff = simulation.getDiffusion();
+    if (ImGui::SliderFloat("Diffusion", &diff, 0.f, 1.f)) simulation.setDiffusion(diff);
+    float dissip = simulation.getDissipation();
+    if (ImGui::SliderFloat("Dissipation", &dissip, 0.f, 0.5f)) simulation.setDissipation(dissip);
+    float velDissip = simulation.getVelocityDissipation();
+    if (ImGui::SliderFloat("Velocity drag", &velDissip, 0.f, 1.5f)) simulation.setVelocityDissipation(velDissip);
+    float turb = simulation.getTurbulence();
+    if (ImGui::SliderFloat("Turbulence", &turb, 0.f, 2.f)) simulation.setTurbulence(turb);
+    float smallTurb = simulation.getSmallScaleTurbulenceGain();
+    if (ImGui::SliderFloat("Small-scale turbulence", &smallTurb, 0.f, 2.f)) simulation.setSmallScaleTurbulenceGain(smallTurb);
+    float vort = simulation.getVorticity();
+    if (ImGui::SliderFloat("Vorticity", &vort, 0.f, 3.f)) simulation.setVorticity(vort);
 
     // Sufit z dziurą
     ImGui::Separator();
@@ -209,6 +243,28 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
         }
     }
     
+    // === LIGHTING ===
+    ImGui::Separator();
+    ImGui::Text("Lighting");
+    LightSettings& light = renderer.getLightSettings();
+    
+    ImGui::SliderFloat("Light Yaw", &light.yaw, -180.0f, 180.0f, "%.1f deg");
+    ImGui::SliderFloat("Light Pitch", &light.pitch, -89.0f, 89.0f, "%.1f deg");
+    ImGui::SliderFloat("Light Distance", &light.distance, 5.0f, 50.0f, "%.1f");
+    ImGui::Checkbox("Show Light Indicator", &light.showIndicator);
+    
+    // Pokaż obliczony kierunek światła
+    glm::vec3 lightDir = light.getDirection();
+    ImGui::Text("Direction: (%.2f, %.2f, %.2f)", lightDir.x, lightDir.y, lightDir.z);
+    glm::vec3 lightPos = light.getPosition();
+    ImGui::Text("Position: (%.1f, %.1f, %.1f)", lightPos.x, lightPos.y, lightPos.z);
+    
+    if (ImGui::Button("Reset Light")) {
+        light.yaw = 45.0f;
+        light.pitch = 60.0f;
+        light.distance = 15.0f;
+    }
+    
     // Camera
     ImGui::Separator();
     glm::vec3 pos = camera.getPosition();
@@ -217,20 +273,44 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
         camera.setPosition(glm::vec3(posArray[0], posArray[1], posArray[2]));
     }
     
-    static float yaw = 0.0f;
-    static float pitch = 0.0f;
-    if (ImGui::SliderFloat("Yaw", &yaw, -180.0f, 180.0f)) {
+    static float yaw = -90.0f;
+    static float pitch = -15.0f;
+    // Synchronizuj suwaki z kamerą (po obrocie myszką wartości się zgadzają)
+    float camYaw = camera.getYaw();
+    float camPitch = camera.getPitch();
+    if (std::abs(yaw - camYaw) > 0.5f || std::abs(pitch - camPitch) > 0.5f) {
+        yaw = camYaw;
+        pitch = camPitch;
+    }
+    if (ImGui::SliderFloat("Cam Yaw", &yaw, -180.0f, 180.0f)) {
         camera.rotate(yaw, pitch);
     }
-    if (ImGui::SliderFloat("Pitch", &pitch, -89.0f, 89.0f)) {
+    if (ImGui::SliderFloat("Cam Pitch", &pitch, -89.0f, 89.0f)) {
         camera.rotate(yaw, pitch);
+    }
+
+    if (ImGui::Button("Reset Camera")) {
+        // Widok z +Z, Y w górę: dym leci w górę na ekranie
+        camera.setPosition(glm::vec3(0.0f, 8.0f, 25.0f));
+        yaw = -90.0f;
+        pitch = -15.0f;
+        camera.rotate(yaw, pitch);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Widok: Z prz\u00f3d, Y w g\u00f3r\u0119 (dym do g\u00f3ry)");
     }
     
-    if (ImGui::Button("Reset Camera")) {
-        camera.setPosition(glm::vec3(0.0f, 0.0f, 10.0f));
-        yaw = -90.0f;
-        pitch = 0.0f;
-        camera.rotate(yaw, pitch);
+    // Maksymalny refresh rate
+    if (app) {
+        ImGui::Separator();
+        ImGui::Text("Refresh rate");
+        int maxFps = app->getMaxFps();
+        if (ImGui::InputInt("Max FPS", &maxFps, 1, 10)) {
+            app->setMaxFps(std::max(0, maxFps));
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("0 = bez limitu");
+        }
     }
     
     // Statistics

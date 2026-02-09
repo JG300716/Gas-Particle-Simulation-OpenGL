@@ -14,6 +14,8 @@ public:
     // Obracanie kamery
     void rotate(float yaw, float pitch); // w stopniach
     void addRotation(float deltaYaw, float deltaPitch);
+    float getYaw() const { return m_yaw; }
+    float getPitch() const { return m_pitch; }
     
     // Ustaw kąt widzenia
     void setFOV(float fov) { m_fov = fov; }

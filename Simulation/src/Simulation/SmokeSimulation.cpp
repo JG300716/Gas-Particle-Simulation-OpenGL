@@ -18,8 +18,11 @@ namespace {
 }
 
 SmokeSimulation::SmokeSimulation()
-    : m_grid(40, 40, 40),
-      m_spawnerPosition(0.f, 0.f, 0.f) {}
+    : m_grid(20, 20, 20),
+      m_spawnerPosition(0.f, 0.f, 0.f)
+{
+    
+}
 
 SmokeSimulation::~SmokeSimulation() = default;
 
@@ -46,6 +49,7 @@ bool SmokeSimulation::initialize(const UINT32& simulationWidth, const UINT32& si
     os << "grid " << m_nx << "x" << m_ny << "x" << m_nz
        << " bounds [" << mn.x << "," << mn.y << "," << mn.z << "]..[" << mx.x << "," << mx.y << "," << mx.z << "]";
     dbgLog("INIT", os.str());
+    
     return true;
 }
 
@@ -67,19 +71,19 @@ void SmokeSimulation::setGridSize(int sizeX, int sizeY, int sizeZ) {
 
 void SmokeSimulation::allocFluid() {
     const size_t n = static_cast<size_t>(m_nx) * m_ny * m_nz;
-    m_u.assign(n, 0.f);
-    m_v.assign(n, 0.f);
-    m_w.assign(n, 0.f);
-    m_p.assign(n, 0.f);
-    m_s.assign(n, 0.f);
-    m_T.assign(n, 0.f);
+    m_velocityX.assign(n, 0.f);
+    m_velocityY.assign(n, 0.f);
+    m_velocityZ.assign(n, 0.f);
+    m_pressure.assign(n, 0.f);
+    m_density.assign(n, 0.f);
+    m_temperature.assign(n, 0.f);
     m_solid.assign(n, 0);
-    m_uTmp.resize(n);
-    m_vTmp.resize(n);
-    m_wTmp.resize(n);
-    m_sTmp.resize(n);
-    m_TTmp.resize(n);
-    m_pTmp.resize(n);
+    m_tmpVelocityX.resize(n);
+    m_tmpVelocityY.resize(n);
+    m_tmpVelocityZ.resize(n);
+    m_tmpDensity.resize(n);
+    m_tmpTemperature.resize(n);
+    m_tmpPressure.resize(n);
 }
 
 void SmokeSimulation::buildSolidMask() {
@@ -156,52 +160,71 @@ float SmokeSimulation::sampleTrilinear(const std::vector<float>& f, float cx, fl
     cx = std::max(0.f, std::min(static_cast<float>(m_nx) - 1.001f, cx));
     cy = std::max(0.f, std::min(static_cast<float>(m_ny) - 1.001f, cy));
     cz = std::max(0.f, std::min(static_cast<float>(m_nz) - 1.001f, cz));
-    int i0 = static_cast<int>(std::floor(cx)), i1 = std::min(i0 + 1, m_nx - 1);
-    int j0 = static_cast<int>(std::floor(cy)), j1 = std::min(j0 + 1, m_ny - 1);
-    int k0 = static_cast<int>(std::floor(cz)), k1 = std::min(k0 + 1, m_nz - 1);
-    float fx = cx - i0, fy = cy - j0, fz = cz - k0;
-    auto v = [&](int i, int j, int k) { return f[flidx(i, j, k)]; };
-    float v000 = v(i0, j0, k0), v100 = v(i1, j0, k0), v010 = v(i0, j1, k0), v110 = v(i1, j1, k0);
-    float v001 = v(i0, j0, k1), v101 = v(i1, j0, k1), v011 = v(i0, j1, k1), v111 = v(i1, j1, k1);
-    float a = v000 * (1 - fx) + v100 * fx;
-    float b = v010 * (1 - fx) + v110 * fx;
-    float c = v001 * (1 - fx) + v101 * fx;
-    float d = v011 * (1 - fx) + v111 * fx;
-    float e = a * (1 - fy) + b * fy;
-    float g = c * (1 - fy) + d * fy;
-    return e * (1 - fz) + g * fz;
+    
+    int i0 = static_cast<int>(std::floor(cx));
+    int j0 = static_cast<int>(std::floor(cy));
+    int k0 = static_cast<int>(std::floor(cz));
+    
+    int i1 = std::min(i0 + 1, m_nx - 1);
+    int j1 = std::min(j0 + 1, m_ny - 1);
+    int k1 = std::min(k0 + 1, m_nz - 1);
+    
+    float fx = cx - i0;
+    float fy = cy - j0;
+    float fz = cz - k0;
+    
+    float v000 = f[flidx(i0, j0, k0)];
+    float v100 = f[flidx(i1, j0, k0)];
+    float v010 = f[flidx(i0, j1, k0)];
+    float v110 = f[flidx(i1, j1, k0)];
+    float v001 = f[flidx(i0, j0, k1)];
+    float v101 = f[flidx(i1, j0, k1)];
+    float v011 = f[flidx(i0, j1, k1)];
+    float v111 = f[flidx(i1, j1, k1)];
+    
+    float v00 = v000 + fx * (v100 - v000);
+    float v10 = v010 + fx * (v110 - v010);
+    float v01 = v001 + fx * (v101 - v001);
+    float v11 = v011 + fx * (v111 - v011);
+    
+    float v0 = v00 + fy * (v10 - v00);
+    float v1 = v01 + fy * (v11 - v01);
+    
+    return v0 + fz * (v1 - v0);
 }
 
 void SmokeSimulation::run(float deltaTime) {
     ++s_dbgFrames;
-    float dt = deltaTime * m_timeScale;
-    if (m_timeScale <= 0.f || m_nx * m_ny * m_nz == 0) return;
-    runFluid(dt);
+
+    deltaTime = std::min(deltaTime, MAX_DT);
+    m_accumulator += deltaTime * m_timeScale;
+
+    while (m_accumulator >= FIXED_DT) {
+        runFluid(FIXED_DT);
+        m_accumulator -= FIXED_DT;
+    }
 }
 
 void SmokeSimulation::runFluid(float dt) {
     const bool dbg = (s_dbgFrames % DBG_LOG_INTERVAL == 1);
+    m_time += dt;
 
+    addSmallScaleTurbulence(dt);
     injectSmoke(dt);
     addBuoyancyGravity(dt);
-
-    if (dbg && s_dbgInjectSp.x >= 0 && s_dbgInjectSp.y >= 0 && s_dbgInjectSp.z >= 0) {
-        int i = s_dbgInjectSp.x, j = s_dbgInjectSp.y, k = s_dbgInjectSp.z;
-        if (i < m_nx && j < m_ny && k < m_nz) {
-            size_t id = flidx(i, j, k);
-            glm::vec3 c = cellCenter(i, j, k);
-            std::ostringstream os;
-            os << "frame=" << s_dbgFrames << " gravity=" << m_gravity << " +Y=up | u,v,w@sp=(" << m_u[id] << "," << m_v[id] << "," << m_w[id]
-               << ") world=(" << c.x << "," << c.y << "," << c.z << ")";
-            dbgLog("DIRECTION", os.str());
-        }
-    }
+    
+    addTurbulence(dt);
+    addVorticityConfinement(dt);
 
     advect(dt);
     diffuse(dt);
-    pressureSolve(40);
+
+    pressureSolve(30);
     project();
+
+    applyVelocityDissipation(dt);
     coolTemperature(dt);
+    dissipate(dt);
 
     if (dbg) {
         constexpr float thresh = 0.01f;
@@ -210,7 +233,7 @@ void SmokeSimulation::runFluid(float dt) {
         for (int k = 0; k < m_nz; ++k)
             for (int j = 0; j < m_ny; ++j)
                 for (int i = 0; i < m_nx; ++i) {
-                    if (m_s[flidx(i, j, k)] <= thresh) continue;
+                    if (m_density[flidx(i, j, k)] <= thresh) continue;
                     ++n;
                     imin = std::min(imin, i); imax = std::max(imax, i);
                     jmin = std::min(jmin, j); jmax = std::max(jmax, j);
@@ -235,13 +258,6 @@ void SmokeSimulation::runFluid(float dt) {
     }
 }
 
-// === GENEROWANIE CZĄSTECZEK DYMU I NADAWANIE PRĘDKOŚCI ===
-// Miejsce: SmokeSimulation::injectSmoke() poniżej.
-// - Środek wstrzykiwania: spawner + (0,1,0), przeliczany na indeks siatki sp.
-// - Pętla po komórkach w cylindrze/kuli wokół sp: dla każdej komórki (i,j,k)
-//   DENSITY i TEMPERATURE: m_s[id] += rate, m_T[id] = T_inj
-//   PRĘDKOŚĆ (głównie Y):  m_v[id] += vUp * rate (główna siła w górę)
-//   + małe perturbacje w X i Z dla naturalnego falowania dymu
 void SmokeSimulation::injectSmoke(float dt) {
     glm::vec3 mn = m_grid.getMinBounds();
     glm::vec3 mx = m_grid.getMaxBounds();
@@ -255,61 +271,74 @@ void SmokeSimulation::injectSmoke(float dt) {
     sp.y = std::max(0, std::min(m_ny - 1, sp.y));
     sp.z = std::max(0, std::min(m_nz - 1, sp.z));
     s_dbgInjectSp = sp;
-    const float rate = m_injectRate * dt;
-    const float T_inj = m_Tamb + 150.f;
-    const float vUp = 8.f;
+    
+    const float densityRate = m_injectRate * dt;      // ile gęstości dodać na klatkę
+    const float T_inj = m_Tamb + 300.f;               // temperatura gorącego dymu (zwiększona)
     const float R2 = static_cast<float>(m_injectRadius * m_injectRadius);
 
     const bool dbg = (s_dbgFrames % DBG_LOG_INTERVAL == 1);
     int injected = 0;
     float sBefore = 0.f;
     size_t idSp = flidx(sp.x, sp.y, sp.z);
-    if (dbg) sBefore = m_s[idSp];
+    if (dbg) sBefore = m_density[idSp];
 
     for (int di = -m_injectRadius; di <= m_injectRadius; ++di)
         for (int dj = 0; dj <= m_injectRadius; ++dj)
             for (int dk = -m_injectRadius; dk <= m_injectRadius; ++dk) {
                 int i = sp.x + di, j = sp.y + dj, k = sp.z + dk;
                 if (i < 0 || i >= m_nx || j < 0 || j >= m_ny || k < 0 || k >= m_nz) continue;
-                if (isSolid(i, j, k) ) continue;
-                float dx = static_cast<float>(i - sp.x), dz = static_cast<float>(k - sp.z);
-                float horiz2 = dx * dx + dz * dz;
+                if (isSolid(i, j, k)) continue;
+                
+                float fdx = static_cast<float>(i - sp.x), fdz = static_cast<float>(k - sp.z);
+                float horiz2 = fdx * fdx + fdz * fdz;
                 if (m_injectCylinder) {
                     if (horiz2 > R2) continue;
                 } else {
-                    float dy = static_cast<float>(j - sp.y);
-                    if (dx * dx + dy * dy + dz * dz > R2) continue;
+                    float fdy = static_cast<float>(j - sp.y);
+                    if (fdx * fdx + fdy * fdy + fdz * fdz > R2) continue;
                 }
+                
                 size_t id = flidx(i, j, k);
-                m_s[id] = std::min(1.f, m_s[id] + rate);
-                m_T[id] = T_inj;
-                // Główna prędkość pionowa (dym leci w górę)
-                m_v[id] += vUp * rate + 0.5f * dt;
-                // Mała perturbacja boczna dla naturalnego wyglądu (±0.5 jednostki/s)
-                float perturbX = 0.3f * std::sin(static_cast<float>(s_dbgFrames * 0.1f + i * 0.5f));
-                float perturbZ = 0.3f * std::cos(static_cast<float>(s_dbgFrames * 0.13f + k * 0.5f));
-                m_u[id] += perturbX * rate;
-                m_w[id] += perturbZ * rate;
+                float oldDensity = m_density[id];
+                
+                // Dodaj gęstość (nasycenie do 1.0)
+                float newDensity = std::min(1.f, oldDensity + densityRate);
+                m_density[id] = newDensity;
+                
+                // Ustaw wysoką temperaturę (zawsze w strefie wstrzykiwania)
+                m_temperature[id] = T_inj;
+                
+                if (m_velocityY[id] < m_injectVelocity) {
+                    float targetV = m_injectVelocity;
+                    m_velocityY[id] = m_velocityY[id] + (targetV - m_velocityY[id]) * std::min(1.0f, dt * 10.0f);
+                }
+                // glm::vec3 swirl = curlNoise3D(i * 0.3f, j * 0.3f + m_time, k * 0.3f);
+                // float swirlStrength = m_injectVelocity * 0.03f;
+                //
+                // m_velocityX[id] += swirl.x * swirlStrength * densityRate;
+                // m_velocityY[id] += swirl.y * swirlStrength * densityRate * 0.3f;
+                // m_velocityZ[id] += swirl.z * swirlStrength * densityRate;
+                
                 ++injected;
             }
 
     if (dbg) {
         std::ostringstream os;
         os << "frame=" << s_dbgFrames << " spawner=(" << m_spawnerPosition.x << "," << m_spawnerPosition.y << "," << m_spawnerPosition.z << ")"
-           << " injectRaw=(" << injectCenterRaw.x << "," << injectCenterRaw.y << "," << injectCenterRaw.z << ")"
-           << " injectClamp=(" << injectCenter.x << "," << injectCenter.y << "," << injectCenter.z << ")"
-           << " sp=(" << sp.x << "," << sp.y << "," << sp.z << ")"
-           << " injectRate=" << m_injectRate << " tempCool=" << m_tempCooling << " diff=" << m_diffusion
-           << " rate=" << rate << " dt=" << dt << " injected=" << injected
-           << " s@sp " << sBefore << "->" << m_s[idSp]
-           << " v@sp=(" << m_u[idSp] << "," << m_v[idSp] << "," << m_w[idSp] << ")";
+           << " injectRate=" << m_injectRate << " injectVel=" << m_injectVelocity
+           << " dt=" << dt << " injected=" << injected
+           << " s@sp " << sBefore << "->" << m_density[idSp];
         dbgLog("SPAWNER", os.str());
-        bool spawnerIn = m_grid.isValidWorldPosition(m_spawnerPosition);
-        bool injectIn = m_grid.isValidWorldPosition(injectCenterRaw);
-        dbgLog("SPAWNER", std::string("spawnerInGrid=") + (spawnerIn ? "1" : "0") + " injectRawInGrid=" + (injectIn ? "1" : "0"));
-        if (injected == 0)
-            dbgLog("SPAWNER", "WARN: zero cells injected (oob or solid?)");
     }
+}
+
+void SmokeSimulation::clearSmoke() {
+    std::fill(m_density.begin(), m_density.end(), 0.f);
+    std::fill(m_temperature.begin(), m_temperature.end(), m_Tamb);
+    std::fill(m_velocityX.begin(), m_velocityX.end(), 0.f);
+    std::fill(m_velocityY.begin(), m_velocityY.end(), 0.f);
+    std::fill(m_velocityZ.begin(), m_velocityZ.end(), 0.f);
+    std::fill(m_pressure.begin(), m_pressure.end(), 0.f);
 }
 
 void SmokeSimulation::diffuse(float dt) {
@@ -331,19 +360,19 @@ void SmokeSimulation::diffuse(float dt) {
                     size_t id = flidx(i, j, k);
                     float sumS = 0.f, sumT = 0.f;
                     int nn = 0;
-                    if (isGas(i + 1, j, k)) { sumS += m_s[flidx(i + 1, j, k)]; sumT += m_T[flidx(i + 1, j, k)]; ++nn; }
-                    if (isGas(i - 1, j, k)) { sumS += m_s[flidx(i - 1, j, k)]; sumT += m_T[flidx(i - 1, j, k)]; ++nn; }
-                    if (isGas(i, j + 1, k)) { sumS += m_s[flidx(i, j + 1, k)]; sumT += m_T[flidx(i, j + 1, k)]; ++nn; }
-                    if (isGas(i, j - 1, k)) { sumS += m_s[flidx(i, j - 1, k)]; sumT += m_T[flidx(i, j - 1, k)]; ++nn; }
-                    if (isGas(i, j, k + 1)) { sumS += m_s[flidx(i, j, k + 1)]; sumT += m_T[flidx(i, j, k + 1)]; ++nn; }
-                    if (isGas(i, j, k - 1)) { sumS += m_s[flidx(i, j, k - 1)]; sumT += m_T[flidx(i, j, k - 1)]; ++nn; }
+                    if (isGas(i + 1, j, k)) { sumS += m_density[flidx(i + 1, j, k)]; sumT += m_temperature[flidx(i + 1, j, k)]; ++nn; }
+                    if (isGas(i - 1, j, k)) { sumS += m_density[flidx(i - 1, j, k)]; sumT += m_temperature[flidx(i - 1, j, k)]; ++nn; }
+                    if (isGas(i, j + 1, k)) { sumS += m_density[flidx(i, j + 1, k)]; sumT += m_temperature[flidx(i, j + 1, k)]; ++nn; }
+                    if (isGas(i, j - 1, k)) { sumS += m_density[flidx(i, j - 1, k)]; sumT += m_temperature[flidx(i, j - 1, k)]; ++nn; }
+                    if (isGas(i, j, k + 1)) { sumS += m_density[flidx(i, j, k + 1)]; sumT += m_temperature[flidx(i, j, k + 1)]; ++nn; }
+                    if (isGas(i, j, k - 1)) { sumS += m_density[flidx(i, j, k - 1)]; sumT += m_temperature[flidx(i, j, k - 1)]; ++nn; }
                     nn = std::max(1, nn);
                     float denom = 1.f + static_cast<float>(nn) * diffCoeff;
-                    m_sTmp[id] = (m_s[id] + diffCoeff * sumS) / denom;
-                    m_TTmp[id] = (m_T[id] + diffCoeff * sumT) / denom;
+                    m_tmpDensity[id] = (m_density[id] + diffCoeff * sumS) / denom;
+                    m_tmpTemperature[id] = (m_temperature[id] + diffCoeff * sumT) / denom;
                 }
-        m_s.swap(m_sTmp);
-        m_T.swap(m_TTmp);
+        m_density.swap(m_tmpDensity);
+        m_temperature.swap(m_tmpTemperature);
     }
 }
 
@@ -352,103 +381,328 @@ void SmokeSimulation::coolTemperature(float dt) {
     for (int k = 0; k < m_nz; ++k)
         for (int j = 0; j < m_ny; ++j)
             for (int i = 0; i < m_nx; ++i) {
-                if (isSolid(i, j, k) ) continue;
+                if (isSolid(i, j, k)) continue;
                 size_t id = flidx(i, j, k);
-                m_T[id] = m_Tamb + (m_T[id] - m_Tamb) * d;
+                m_temperature[id] = m_Tamb + (m_temperature[id] - m_Tamb) * d;
+            }
+}
+
+// Prosta funkcja szumu 3D (hash-based)
+float SmokeSimulation::noise3D(float x, float y, float z) const {
+    // Szybki hash dla pseudo-losowego szumu
+    auto hash = [](int n) -> float {
+        n = (n << 13) ^ n;
+        return 1.0f - ((n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff) / 1073741824.0f;
+    };
+    
+    int ix = static_cast<int>(std::floor(x));
+    int iy = static_cast<int>(std::floor(y));
+    int iz = static_cast<int>(std::floor(z));
+    float fx = x - ix;
+    float fy = y - iy;
+    float fz = z - iz;
+    
+    // Smooth interpolation
+    fx = fx * fx * (3.0f - 2.0f * fx);
+    fy = fy * fy * (3.0f - 2.0f * fy);
+    fz = fz * fz * (3.0f - 2.0f * fz);
+    
+    auto idx = [](int x, int y, int z) { return x + y * 57 + z * 113; };
+    
+    float v000 = hash(idx(ix, iy, iz));
+    float v100 = hash(idx(ix + 1, iy, iz));
+    float v010 = hash(idx(ix, iy + 1, iz));
+    float v110 = hash(idx(ix + 1, iy + 1, iz));
+    float v001 = hash(idx(ix, iy, iz + 1));
+    float v101 = hash(idx(ix + 1, iy, iz + 1));
+    float v011 = hash(idx(ix, iy + 1, iz + 1));
+    float v111 = hash(idx(ix + 1, iy + 1, iz + 1));
+    
+    float v00 = v000 * (1 - fx) + v100 * fx;
+    float v01 = v001 * (1 - fx) + v101 * fx;
+    float v10 = v010 * (1 - fx) + v110 * fx;
+    float v11 = v011 * (1 - fx) + v111 * fx;
+    
+    float v0 = v00 * (1 - fy) + v10 * fy;
+    float v1 = v01 * (1 - fy) + v11 * fy;
+    
+    return v0 * (1 - fz) + v1 * fz;
+}
+
+glm::vec3 SmokeSimulation::curlNoise3D(float x, float y, float z) const {
+    const float e = 0.0001f;
+    float inv2e = 0.5f / e;
+    
+    // Use 3 offset noise samples as vector potential components
+    auto potential = [this](float x, float y, float z) -> glm::vec3 {
+        return glm::vec3(
+            noise3D(x, y, z),
+            noise3D(x + 31.337f, y, z),      // Offset to decorrelate
+            noise3D(x, y + 59.432f, z)
+        );
+    };
+    
+    glm::vec3 px1 = potential(x + e, y, z);
+    glm::vec3 px0 = potential(x - e, y, z);
+    glm::vec3 py1 = potential(x, y + e, z);
+    glm::vec3 py0 = potential(x, y - e, z);
+    glm::vec3 pz1 = potential(x, y, z + e);
+    glm::vec3 pz0 = potential(x, y, z - e);
+    
+    // curl(ψ) = (∂ψ_z/∂y - ∂ψ_y/∂z, ∂ψ_x/∂z - ∂ψ_z/∂x, ∂ψ_y/∂x - ∂ψ_x/∂y)
+    return glm::vec3(
+        (pz1.z - pz0.z) * inv2e - (py1.y - py0.y) * inv2e,
+        (px1.x - px0.x) * inv2e - (pz1.z - pz0.z) * inv2e,
+        (py1.y - py0.y) * inv2e - (px1.x - px0.x) * inv2e
+    );
+}
+
+// Small Scale Turbulence - tylko w PUSTYCH komórkach (density < threshold).
+// Gdy dym dotrze do tych obszarów, pole prędkości ma już "życie" - naturalny ruch.
+void SmokeSimulation::addSmallScaleTurbulence(float dt) {
+    if (m_smallScaleTurbulenceGain <= 0.f) return;
+    
+    constexpr float emptyThreshold = 0.01f;  // komórka uznana za pustą
+    const float cellScale = 0.4f;             // skala szumu na rozmiar komórki
+    const float timeScale = 0.2f;
+    
+    for (int k = 1; k < m_nz - 1; ++k)
+        for (int j = 1; j < m_ny - 1; ++j)
+            for (int i = 1; i < m_nx - 1; ++i) {
+                if (isSolid(i, j, k)) continue;
+                size_t id = flidx(i, j, k);
+                
+                if (m_density[id] > emptyThreshold) continue;  // tylko puste komórki
+                
+                float nx = i * cellScale;
+                float ny = j * cellScale;
+                float nz = k * cellScale;
+                float nt = m_time * timeScale;
+                
+                float nU = noise3D(nx + nt, ny + 50.f, nz);
+                float nV = noise3D(nx + 100.f, ny + nt, nz);
+                float nW = noise3D(nx, ny + 150.f, nz + nt);
+                
+                float strength = m_smallScaleTurbulenceGain * dt;
+                
+                m_velocityX[id] += nU * strength;
+                m_velocityY[id] += nV * strength * 0.2f;  // mniej w pionie
+                m_velocityZ[id] += nW * strength;
+            }
+}
+
+// Dodaje turbulencję (szum) do pola prędkości - dla chaotycznego ruchu
+void SmokeSimulation::addTurbulence(float dt) {
+    if (m_turbulence <= 0.f) return;
+    
+    const float noiseScale = 0.12f;  // skala szumu w przestrzeni
+    const float timeScale = 0.3f;    // jak szybko szum się zmienia (wolniej = płynniejszy ruch)
+    
+    for (int k = 0; k < m_nz; ++k)
+        for (int j = 0; j < m_ny; ++j)
+            for (int i = 0; i < m_nx; ++i) {
+                if (isSolid(i, j, k)) continue;
+                size_t id = flidx(i, j, k);
+                
+                // Turbulencja działa tylko gdzie jest dym
+                float density = m_density[id];
+                if (density < 0.02f) continue;
+                
+                float nx = i * noiseScale;
+                float ny = j * noiseScale;
+                float nz = k * noiseScale;
+                float nt = m_time * timeScale;
+                
+                float strength = m_turbulence * std::sqrt(density) * dt;
+                
+                glm::vec3 curl = curlNoise3D(nx + nt, ny, nz);  // Lepsze niż curlNoise
+                m_velocityX[id] += curl.x * strength;
+                m_velocityY[id] += curl.y * strength * 0.5f;
+                m_velocityZ[id] += curl.z * strength;
+            }
+}
+
+// Vorticity confinement - wzmacnia wiry w płynie (realistyczne kłęby dymu)
+void SmokeSimulation::addVorticityConfinement(float dt) {
+    if (m_vorticity <= 0.f) return;
+    
+    // Oblicz vorticity (curl prędkości) w każdej komórce
+    std::vector<glm::vec3> omega(m_nx * m_ny * m_nz, glm::vec3(0.f));
+    
+    for (int k = 1; k < m_nz - 1; ++k)
+        for (int j = 1; j < m_ny - 1; ++j)
+            for (int i = 1; i < m_nx - 1; ++i) {
+                if (isSolid(i, j, k)) continue;
+                
+                // Gradienty prędkości (centralne różnice)
+                float dwdy = (m_velocityZ[flidx(i, j + 1, k)] - m_velocityZ[flidx(i, j - 1, k)]) * 0.5f;
+                float dvdz = (m_velocityY[flidx(i, j, k + 1)] - m_velocityY[flidx(i, j, k - 1)]) * 0.5f;
+                float dudz = (m_velocityX[flidx(i, j, k + 1)] - m_velocityX[flidx(i, j, k - 1)]) * 0.5f;
+                float dwdx = (m_velocityZ[flidx(i + 1, j, k)] - m_velocityZ[flidx(i - 1, j, k)]) * 0.5f;
+                float dvdx = (m_velocityY[flidx(i + 1, j, k)] - m_velocityY[flidx(i - 1, j, k)]) * 0.5f;
+                float dudy = (m_velocityX[flidx(i, j + 1, k)] - m_velocityX[flidx(i, j - 1, k)]) * 0.5f;
+                
+                // curl = (dw/dy - dv/dz, du/dz - dw/dx, dv/dx - du/dy)
+                omega[flidx(i, j, k)] = glm::vec3(dwdy - dvdz, dudz - dwdx, dvdx - dudy);
+            }
+    
+    // Zastosuj siłę vorticity confinement
+    for (int k = 1; k < m_nz - 1; ++k)
+        for (int j = 1; j < m_ny - 1; ++j)
+            for (int i = 1; i < m_nx - 1; ++i) {
+                if (isSolid(i, j, k)) continue;
+                size_t id = flidx(i, j, k);
+                
+                // Tylko gdzie jest dym
+                if (m_density[id] < 0.01f) continue;
+                
+                glm::vec3 w = omega[id];
+                float wLen = glm::length(w);
+                if (wLen < 1e-6f) continue;
+                
+                // Gradient wielkości vorticity
+                float omegaXp = glm::length(omega[flidx(i + 1, j, k)]);
+                float omegaXm = glm::length(omega[flidx(i - 1, j, k)]);
+                float omegaYp = glm::length(omega[flidx(i, j + 1, k)]);
+                float omegaYm = glm::length(omega[flidx(i, j - 1, k)]);
+                float omegaZp = glm::length(omega[flidx(i, j, k + 1)]);
+                float omegaZm = glm::length(omega[flidx(i, j, k - 1)]);
+                
+                glm::vec3 eta(omegaXp - omegaXm, omegaYp - omegaYm, omegaZp - omegaZm);
+                float etaLen = glm::length(eta);
+                if (etaLen < 1e-6f) continue;
+                
+                glm::vec3 N = eta / etaLen;
+                
+                // Siła vorticity = epsilon * (N x omega)
+                glm::vec3 force = m_vorticity * glm::cross(N, w) * dt;
+                
+                // Redukuj siły poziome żeby dym szedł głównie w górę
+                m_velocityX[id] += force.x;
+                m_velocityY[id] += force.y;
+                m_velocityZ[id] += force.z;
+            }
+}
+
+// Dysypacja - powolne zanikanie gęstości dymu
+// Wolniejsze przy suficie (górnej granicy) dla akumulacji
+void SmokeSimulation::dissipate(float dt) {
+    if (m_dissipation <= 0.f) return;
+    
+    const float topY = static_cast<float>(m_ny - 1);
+    
+    for (int k = 0; k < m_nz; ++k)
+        for (int j = 0; j < m_ny; ++j)
+            for (int i = 0; i < m_nx; ++i) {
+                if (isSolid(i, j, k)) continue;
+                size_t id = flidx(i, j, k);
+                
+                if (m_density[id] < 0.001f) {
+                    m_density[id] = 0.f;
+                    continue;
+                }
+                
+                // Współczynnik dysypacji - mniejszy przy suficie dla akumulacji
+                float heightRatio = static_cast<float>(j) / topY;
+                
+                // Przy suficie dysypacja jest wolniejsza (dym gromadzi się pod sufitem)
+                float dissipFactor;
+                if (heightRatio > 0.85f) {
+                    // Wolna dysypacja przy suficie - dym się gromadzi
+                    dissipFactor = m_dissipation * 0.3f;
+                } else if (heightRatio > 0.7f) {
+                    // Stopniowe przejście
+                    float t = (heightRatio - 0.7f) / 0.15f;
+                    dissipFactor = m_dissipation * (1.0f - t * 0.7f);
+                } else {
+                    dissipFactor = m_dissipation;
+                }
+                
+                // Eksponencjalne zanikanie
+                m_density[id] *= std::max(0.f, 1.f - dissipFactor * dt);
+            }
+}
+
+void SmokeSimulation::applyVelocityDissipation(float dt) {
+    if (m_velocityDissipation <= 0.f) return;
+    
+    const float decay = std::max(0.f, 1.f - m_velocityDissipation * dt);
+    
+    for (int k = 0; k < m_nz; ++k)
+        for (int j = 0; j < m_ny; ++j)
+            for (int i = 0; i < m_nx; ++i) {
+                if (isSolid(i, j, k)) continue;
+                size_t id = flidx(i, j, k);
+                m_velocityX[id] *= decay;
+                m_velocityY[id] *= decay;
+                m_velocityZ[id] *= decay;
             }
 }
 
 void SmokeSimulation::addBuoyancyGravity(float dt) {
+    // Wypór od różnicy gęstości (g/m³): (rho_air - rho_smoke)/rho_air * stężenie; + wypór termiczny
+    const float rhoRatio = (m_airDensity - m_smokeParticleDensity) / std::max(1.f, m_airDensity);
     for (int k = 0; k < m_nz; ++k)
         for (int j = 0; j < m_ny; ++j)
             for (int i = 0; i < m_nx; ++i) {
-                if (isSolid(i, j, k) ) continue;
-                size_t id = flidx(i, j, k);
-                float b = -m_buoyancyAlpha * m_s[id] + m_buoyancyBeta * (m_T[id] - m_Tamb);
-                m_v[id] += (m_gravity + b) * dt;
+                if (isSolid(i, j, k)) continue;
+                const size_t id = flidx(i, j, k);
+                const float concentration = m_density[id];  // 0–1
+                const float buoy = m_buoyancyAlpha * rhoRatio * concentration
+                    + m_buoyancyBeta * (m_temperature[id] - m_Tamb);
+                m_velocityY[id] += (m_gravity + buoy) * dt;
             }
 }
 
 void SmokeSimulation::advect(float dt) {
     const float dx = 1.f;
     const glm::vec3 o = m_grid.getMinBounds();
-    m_uTmp = m_u;
-    m_vTmp = m_v;
-    m_wTmp = m_w;
-    m_sTmp = m_s;
-    m_TTmp = m_T;
+    m_tmpVelocityX = m_velocityX;
+    m_tmpVelocityY = m_velocityY;
+    m_tmpVelocityZ = m_velocityZ;
+    m_tmpDensity = m_density;
+    m_tmpTemperature = m_temperature;
 
     for (int k = 0; k < m_nz; ++k)
         for (int j = 0; j < m_ny; ++j)
             for (int i = 0; i < m_nx; ++i) {
-                if (isSolid(i, j, k) ) continue;
-                glm::vec3 pos = cellCenter(i, j, k);
+                if (isSolid(i, j, k)) continue;
+                
                 size_t id = flidx(i, j, k);
-                float u0 = m_u[id], v0 = m_v[id], w0 = m_w[id];
-                float s0 = m_s[id], T0 = m_T[id];
+                glm::vec3 pos = cellCenter(i, j, k);
+                float u0 = m_velocityX[id], v0 = m_velocityY[id], w0 = m_velocityZ[id];
+                
+                // Semi-Lagrangian backtrace
                 glm::vec3 back = pos - dt * glm::vec3(u0, v0, w0);
-                glm::vec3 local = (back - o) / dx;
-                int ci = static_cast<int>(std::floor(local.x));
-                int cj = static_cast<int>(std::floor(local.y));
-                int ck = static_cast<int>(std::floor(local.z));
-                ci = std::max(0, std::min(m_nx - 1, ci));
-                cj = std::max(0, std::min(m_ny - 1, cj));
-                ck = std::max(0, std::min(m_nz - 1, ck));
-                bool atBoundary = (ci == 0 || ci == m_nx - 1 || cj == 0 || cj == m_ny - 1 || ck == 0 || ck == m_nz - 1);
-                bool fromSolid = isSolid(ci, cj, ck);
-                if (atBoundary || fromSolid) {
-                    m_uTmp[id] = u0;
-                    m_vTmp[id] = v0;
-                    m_wTmp[id] = w0;
-                    if (fromSolid) {
-                        m_sTmp[id] = 0.f;
-                        m_TTmp[id] = m_Tamb;
-                    } else {
-                        bool onBoundary = (i == 0 || i == m_nx - 1 || j == 0 || j == m_ny - 1 || k == 0 || k == m_nz - 1);
-                        if (onBoundary) {
-                            int ii = i, jj = j, kk = k;
-                            if      (j == m_ny - 1 && m_ny > 1) jj = m_ny - 2;
-                            else if (j == 0       && m_ny > 1) jj = 1;
-                            else if (i == m_nx - 1 && m_nx > 1) ii = m_nx - 2;
-                            else if (i == 0       && m_nx > 1) ii = 1;
-                            else if (k == m_nz - 1 && m_nz > 1) kk = m_nz - 2;
-                            else if (k == 0       && m_nz > 1) kk = 1;
-                            ii = std::max(0, std::min(m_nx - 1, ii));
-                            jj = std::max(0, std::min(m_ny - 1, jj));
-                            kk = std::max(0, std::min(m_nz - 1, kk));
-                            m_sTmp[id] = m_s[flidx(ii, jj, kk)];
-                            m_TTmp[id] = m_T[flidx(ii, jj, kk)];
-                        } else {
-                            m_sTmp[id] = s0;
-                            m_TTmp[id] = T0;
-                        }
-                    }
-                } else {
-                    m_uTmp[id] = sampleTrilinear(m_u, local.x, local.y, local.z);
-                    m_vTmp[id] = sampleTrilinear(m_v, local.x, local.y, local.z);
-                    m_wTmp[id] = sampleTrilinear(m_w, local.x, local.y, local.z);
-                    m_sTmp[id] = sampleTrilinear(m_s, local.x, local.y, local.z);
-                    m_TTmp[id] = sampleTrilinear(m_T, local.x, local.y, local.z);
-                }
+                // Cell-centered fields: convert world -> grid index so that cell centers map to integer coords
+                glm::vec3 local = (back - o) / dx - glm::vec3(0.5f);
+                
+                // Sample from previous position (trilinear handles clamping)
+                m_tmpVelocityX[id] = sampleTrilinear(m_velocityX, local.x, local.y, local.z);
+                m_tmpVelocityY[id] = sampleTrilinear(m_velocityY, local.x, local.y, local.z);
+                m_tmpVelocityZ[id] = sampleTrilinear(m_velocityZ, local.x, local.y, local.z);
+                m_tmpDensity[id] = sampleTrilinear(m_density, local.x, local.y, local.z);
+                m_tmpTemperature[id] = sampleTrilinear(m_temperature, local.x, local.y, local.z);
             }
 
-    m_u.swap(m_uTmp);
-    m_v.swap(m_vTmp);
-    m_w.swap(m_wTmp);
-    m_s.swap(m_sTmp);
-    m_T.swap(m_TTmp);
-
+    m_velocityX.swap(m_tmpVelocityX);
+    m_velocityY.swap(m_tmpVelocityY);
+    m_velocityZ.swap(m_tmpVelocityZ);
+    m_density.swap(m_tmpDensity);
+    m_temperature.swap(m_tmpTemperature);
+    
+    // Boundary conditions - zero velocity through walls
     for (int k = 0; k < m_nz; ++k)
         for (int j = 0; j < m_ny; ++j)
             for (int i = 0; i < m_nx; ++i) {
                 size_t id = flidx(i, j, k);
                 if (isSolid(i, j, k)) {
-                    m_u[id] = m_v[id] = m_w[id] = 0.f;
+                    m_velocityX[id] = m_velocityY[id] = m_velocityZ[id] = 0.f;
                     continue;
                 }
-                if (i == 0 || i == m_nx - 1) m_u[id] = 0.f;
-                if (j == 0 || j == m_ny - 1) m_v[id] = 0.f;
-                if (k == 0 || k == m_nz - 1) m_w[id] = 0.f;
+                if (i == 0 || i == m_nx - 1) m_velocityX[id] = 0.f;
+                if (j == 0 || j == m_ny - 1) m_velocityY[id] = 0.f;  // Floor only
+                if (k == 0 || k == m_nz - 1) m_velocityZ[id] = 0.f;
             }
 }
 
@@ -462,27 +716,27 @@ void SmokeSimulation::pressureSolve(int iterations) {
             for (int i = 0; i < m_nx; ++i) {
                 if (isSolid(i, j, k) ) continue;
                 size_t id = flidx(i, j, k);
-                float uR = (i + 1 < m_nx) ? m_u[flidx(i + 1, j, k)] : m_u[id];
-                float uL = (i - 1 >= 0) ? m_u[flidx(i - 1, j, k)] : m_u[id];
-                float vT = (j + 1 < m_ny) ? m_v[flidx(i, j + 1, k)] : m_v[id];
-                float vB = (j - 1 >= 0) ? m_v[flidx(i, j - 1, k)] : m_v[id];
-                float wF = (k + 1 < m_nz) ? m_w[flidx(i, j, k + 1)] : m_w[id];
-                float wK = (k - 1 >= 0) ? m_w[flidx(i, j, k - 1)] : m_w[id];
-                if (isSolid(i + 1, j, k)) uR = m_u[id];
-                if (isSolid(i - 1, j, k)) uL = m_u[id];
-                if (isSolid(i, j + 1, k)) vT = m_v[id];
-                if (isSolid(i, j - 1, k)) vB = m_v[id];
-                if (isSolid(i, j, k + 1)) wF = m_w[id];
-                if (isSolid(i, j, k - 1)) wK = m_w[id];
+                float uR = (i + 1 < m_nx) ? m_velocityX[flidx(i + 1, j, k)] : m_velocityX[id];
+                float uL = (i - 1 >= 0) ? m_velocityX[flidx(i - 1, j, k)] : m_velocityX[id];
+                float vT = (j + 1 < m_ny) ? m_velocityY[flidx(i, j + 1, k)] : m_velocityY[id];
+                float vB = (j - 1 >= 0) ? m_velocityY[flidx(i, j - 1, k)] : m_velocityY[id];
+                float wF = (k + 1 < m_nz) ? m_velocityZ[flidx(i, j, k + 1)] : m_velocityZ[id];
+                float wK = (k - 1 >= 0) ? m_velocityZ[flidx(i, j, k - 1)] : m_velocityZ[id];
+                if (isSolid(i + 1, j, k)) uR = m_velocityX[id];
+                if (isSolid(i - 1, j, k)) uL = m_velocityX[id];
+                if (isSolid(i, j + 1, k)) vT = m_velocityY[id];
+                if (isSolid(i, j - 1, k)) vB = m_velocityY[id];
+                if (isSolid(i, j, k + 1)) wF = m_velocityZ[id];
+                if (isSolid(i, j, k - 1)) wK = m_velocityZ[id];
                 div[id] = ((uR - uL) + (vT - vB) + (wF - wK)) / dx;
             }
 
-    std::fill(m_p.begin(), m_p.end(), 0.f);
+    std::fill(m_pressure.begin(), m_pressure.end(), 0.f);
     const float dx2 = dx * dx;
     auto pNeighbor = [this](int i, int j, int k) {
         if (i < 0 || i >= m_nx || j < 0 || j >= m_ny || k < 0 || k >= m_nz) return 0.f;
         if (isSolid(i, j, k) ) return 0.f;
-        return m_p[flidx(i, j, k)];
+        return m_pressure[flidx(i, j, k)];
     };
 
     for (int it = 0; it < iterations; ++it) {
@@ -495,9 +749,9 @@ void SmokeSimulation::pressureSolve(int iterations) {
                               + pNeighbor(i, j, k + 1) + pNeighbor(i, j, k - 1);
                     const int nn = 6;
                     size_t id = flidx(i, j, k);
-                    m_pTmp[id] = (sum - dx2 * div[id]) / static_cast<float>(nn);
+                    m_tmpPressure[id] = (sum - dx2 * div[id]) / static_cast<float>(nn);
                 }
-        m_p.swap(m_pTmp);
+        m_pressure.swap(m_tmpPressure);
     }
 }
 
@@ -506,34 +760,36 @@ void SmokeSimulation::project() {
     auto pAt = [this](int i, int j, int k) {
         if (i < 0 || i >= m_nx || j < 0 || j >= m_ny || k < 0 || k >= m_nz) return 0.f;
         if (isSolid(i, j, k) ) return 0.f;
-        return m_p[flidx(i, j, k)];
+        return m_pressure[flidx(i, j, k)];
     };
+    
     for (int k = 0; k < m_nz; ++k)
         for (int j = 0; j < m_ny; ++j)
             for (int i = 0; i < m_nx; ++i) {
                 if (isSolid(i, j, k) ) continue;
                 size_t id = flidx(i, j, k);
+                
                 float pL = pAt(i - 1, j, k), pR = pAt(i + 1, j, k);
                 float pB = pAt(i, j - 1, k), pT = pAt(i, j + 1, k);
                 float pK = pAt(i, j, k - 1), pF = pAt(i, j, k + 1);
                 float dpdx = (pR - pL) / (2.f * dx);
                 float dpdy = (pT - pB) / (2.f * dx);
                 float dpdz = (pF - pK) / (2.f * dx);
-                m_u[id] -= dpdx;
-                m_v[id] -= dpdy;
-                m_w[id] -= dpdz;
+                m_velocityX[id] -= dpdx;
+                m_velocityY[id] -= dpdy;
+                m_velocityZ[id] -= dpdz;
             }
-
+    
     for (int k = 0; k < m_nz; ++k)
         for (int j = 0; j < m_ny; ++j)
             for (int i = 0; i < m_nx; ++i) {
                 if (isSolid(i, j, k)) {
                     size_t id = flidx(i, j, k);
-                    m_u[id] = m_v[id] = m_w[id] = 0.f;
+                    m_velocityX[id] = m_velocityY[id] = m_velocityZ[id] = 0.f;
                 }
-                if (i == 0 || i == m_nx - 1) m_u[flidx(i, j, k)] = 0.f;
-                if (j == 0 || j == m_ny - 1) m_v[flidx(i, j, k)] = 0.f;
-                if (k == 0 || k == m_nz - 1) m_w[flidx(i, j, k)] = 0.f;
+                if (i == 0 || i == m_nx - 1) m_velocityX[flidx(i, j, k)] = 0.f;
+                if (j == 0 || j == m_ny - 1) m_velocityY[flidx(i, j, k)] = 0.f;
+                if (k == 0 || k == m_nz - 1) m_velocityZ[flidx(i, j, k)] = 0.f;
             }
 }
 
@@ -564,7 +820,7 @@ void SmokeSimulation::clearObstacles() {
 int SmokeSimulation::getSmokeCellCount() const {
     constexpr float thresh = 0.01f;
     int n = 0;
-    for (float v : m_s)
+    for (float v : m_density)
         if (v > thresh) ++n;
     return n;
 }

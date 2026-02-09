@@ -12,13 +12,17 @@ public:
     ~Application();
 
     // Inicjalizacja aplikacji
-    bool Initialize(int windowWidth = 680, int windowHeight = 420, const char* windowTitle = "Symulacja Dymu");
+    bool Initialize(int windowWidth = 680, int windowHeight = 1080, const char* windowTitle = "Symulacja Dymu");
     
     // Uruchomienie głównej pętli
     void Run();
     
     // Czyszczenie zasobów
     void Clean();
+
+    // Maksymalny refresh rate (0 = bez limitu)
+    int getMaxFps() const { return m_maxFps; }
+    void setMaxFps(int fps) { m_maxFps = (fps >= 0) ? fps : 0; }
 
 private:
     GLFWwindow* m_window;
@@ -33,6 +37,9 @@ private:
     // Performance tracking
     float m_lastFrameTime;
     float m_lastRenderTime;
+
+    // Limit FPS (0 = bez limitu)
+    int m_maxFps{ 0 };
 
     bool m_showTempMode{ false };
     bool m_campfireWireframe{ false };

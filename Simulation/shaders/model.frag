@@ -7,11 +7,13 @@ out vec4 FragColor;
 uniform vec3 uColor;
 uniform bool uUseTexture;
 uniform sampler2D uTexture;
+uniform vec3 uLightDir;  // kierunek światła (znormalizowany)
 
 void main() {
     vec3 n = normalize(vNormal);
-    float d = max(0.0, dot(n, vec3(0.4, 0.8, 0.2)));
-    float lit = 0.4 + 0.6 * d;
+    vec3 lightDir = normalize(uLightDir);
+    float d = max(0.0, dot(n, lightDir));
+    float lit = 0.3 + 0.7 * d;  // 30% ambient + 70% diffuse
     vec3 col;
     if (uUseTexture) {
         col = texture(uTexture, vTexCoord).rgb * uColor * lit;

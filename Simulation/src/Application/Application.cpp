@@ -6,6 +6,7 @@
 #include <iostream>
 #include <algorithm>
 #include <chrono>
+#include <thread>
 
 #include "../../../ImGui/imgui.h"
 #include "../../../ImGui/imgui_impl_glfw.h"
@@ -146,9 +147,9 @@ bool Application::initializeSimulation() {
         std::cerr << "Failed to initialize simulation" << std::endl;
         return false;
     }
-    m_simulation.setSpawnerPosition(glm::vec3(0.f, -10.f, 0.f));
+    m_simulation.setSpawnerPosition(glm::vec3(0.f, -8.f, 0.f));
 
-    m_camera.setPosition(glm::vec3(0.0f, 8.0f, 25.0f));
+    m_camera.setPosition(glm::vec3(0.0f, 8.0f, 40.0f));
     m_camera.rotate(-90.0f, -15.0f);
     m_camera.setNearFar(0.1f, 500.0f);
     
@@ -164,6 +165,8 @@ void Application::Run() {
     float lastTime = static_cast<float>(glfwGetTime());
     
     while (!glfwWindowShouldClose(m_window)) {
+        auto frameStart = std::chrono::high_resolution_clock::now();
+        
         // Oblicz deltaTime
         float currentTime = static_cast<float>(glfwGetTime());
         float deltaTime = currentTime - lastTime;
@@ -187,6 +190,17 @@ void Application::Run() {
         
         // Zamiana buforów
         glfwSwapBuffers(m_window);
+        
+        // Limit FPS (0 = bez limitu)
+        if (m_maxFps > 0) {
+            auto frameEnd = std::chrono::high_resolution_clock::now();
+            double frameElapsed = std::chrono::duration<double>(frameEnd - frameStart).count();
+            double minFrameTime = 1.0 / static_cast<double>(m_maxFps);
+            if (frameElapsed < minFrameTime) {
+                std::this_thread::sleep_for(
+                    std::chrono::duration<double>(minFrameTime - frameElapsed));
+            }
+        }
     }
 }
 
@@ -200,7 +214,7 @@ void Application::updateFrame(float deltaTime) {
     m_simulation.run(deltaTime);
     
     // Renderuj UI (wszystko w jednym oknie)
-    ImGuiControls::renderAllControls(m_simulation, m_camera);
+    ImGuiControls::renderAllControls(m_simulation, m_camera, m_renderer, this);
     
     // Renderuj overlay z wydajnością
     ImGuiControls::renderPerformanceOverlay(m_lastFrameTime, m_lastRenderTime);
@@ -225,6 +239,8 @@ void Application::renderFrame() {
     m_renderer.renderObstacles(obstaclesForRender);
 
     m_renderer.renderCampfire(m_simulation.getSpawnerPosition(), m_campfireWireframe);
+
+    m_renderer.renderLightIndicator();
 
     m_renderer.renderGridWireframe(m_simulation.getGrid());
 

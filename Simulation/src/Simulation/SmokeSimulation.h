@@ -49,12 +49,28 @@ public:
     void setBuoyancyAlpha(float v) { m_buoyancyAlpha = v; }
     float getBuoyancyBeta() const { return m_buoyancyBeta; }
     void setBuoyancyBeta(float v) { m_buoyancyBeta = v; }
+    float getAirDensity() const { return m_airDensity; }
+    void setAirDensity(float v) { m_airDensity = std::max(1.f, v); }
+    float getSmokeParticleDensity() const { return m_smokeParticleDensity; }
+    void setSmokeParticleDensity(float v) { m_smokeParticleDensity = std::max(1.f, v); }
     float getTempCooling() const { return m_tempCooling; }
     void setTempCooling(float v) { m_tempCooling = std::max(0.f, std::min(10.f, v)); }
     float getDiffusion() const { return m_diffusion; }
     void setDiffusion(float v) { m_diffusion = std::max(0.f, std::min(10.f, v)); }
+    float getDissipation() const { return m_dissipation; }
+    void setDissipation(float v) { m_dissipation = std::max(0.f, std::min(1.f, v)); }
+    float getVelocityDissipation() const { return m_velocityDissipation; }
+    void setVelocityDissipation(float v) { m_velocityDissipation = std::max(0.f, std::min(2.f, v)); }
+    float getTurbulence() const { return m_turbulence; }
+    void setTurbulence(float v) { m_turbulence = std::max(0.f, std::min(5.f, v)); }
+    float getSmallScaleTurbulenceGain() const { return m_smallScaleTurbulenceGain; }
+    void setSmallScaleTurbulenceGain(float v) { m_smallScaleTurbulenceGain = std::max(0.f, std::min(3.f, v)); }
+    float getVorticity() const { return m_vorticity; }
+    void setVorticity(float v) { m_vorticity = std::max(0.f, std::min(10.f, v)); }
     float getInjectRate() const { return m_injectRate; }
     void setInjectRate(float v) { m_injectRate = std::max(0.f, std::min(50.f, v)); }
+    float getInjectVelocity() const { return m_injectVelocity; }
+    void setInjectVelocity(float v) { m_injectVelocity = std::max(0.f, std::min(20.f, v)); }
     bool getInjectCylinder() const { return m_injectCylinder; }
     void setInjectCylinder(bool v) { m_injectCylinder = v; }
 
@@ -81,9 +97,12 @@ public:
 
     const Grid& getGrid() const { return m_grid; }
 
+    // Czyszczenie dymu
+    void clearSmoke();
+
     // Siatka dymu dla renderera (raymarch 3D)
-    const float* getSmokeDensityData() const { return m_s.data(); }
-    const float* getSmokeTemperatureData() const { return m_T.data(); }
+    const float* getSmokeDensityData() const { return m_density.data(); }
+    const float* getSmokeTemperatureData() const { return m_temperature.data(); }
     int getSmokeNx() const { return m_nx; }
     int getSmokeNy() const { return m_ny; }
     int getSmokeNz() const { return m_nz; }
@@ -93,23 +112,38 @@ private:
     Grid m_grid;
     std::vector<Obstacle> m_obstacles;
     WallWithHole m_ceiling;
-    glm::vec3 m_spawnerPosition{ 0.f, -50.f, 0.f };
+    glm::vec3 m_spawnerPosition{ 0.f, -8.f, 0.f };
 
     int m_nx{ 0 }, m_ny{ 0 }, m_nz{ 0 };
     float m_ambientPressure{ 1013.25f };
     float m_gravity{ -9.81f };  // Negative = down in Y-up system
     float m_timeScale{ 1.0f };
-    float m_Tamb{ 0.f };
-    float m_buoyancyAlpha{ 0.02f };
-    float m_buoyancyBeta{ 0.8f };
-    float m_tempCooling{ 0.1f };
-    float m_diffusion{ 0.5f };
-    float m_injectRate{ 15.f };
-    int m_injectRadius{ 2 };
+    float m_Tamb{ 30.f };
+    float m_buoyancyAlpha{ 0.0f };    // skala wpływu różnicy gęstości na wypór
+    float m_buoyancyBeta{ 1.0f };     // siła wyporu termicznego
+    float m_airDensity{ 1200.f };      // gęstość powietrza [g/m³]
+    float m_smokeParticleDensity{ 1100.f }; // gęstość cząsteczek dymu [g/m³] (lżejsza = unosi się)
+    float m_tempCooling{ 0.1f };       // szybkość chłodzenia
+    float m_diffusion{ 0.04f };        // dyfuzja gęstości/temperatury
+    float m_dissipation{ 0.005f };      // szybkość zanikania gęstości
+    float m_velocityDissipation{ 0.2f }; // opór prędkości (drag) - dym naturalnie zwalnia
+    float m_turbulence{ 0.01f };        // siła turbulencji
+    float m_smallScaleTurbulenceGain{ 0.0f }; // turbulencja w pustych komórkach (życie zanim dotrze dym)
+    float m_vorticity{ 0.3f };         // siła wirów (vorticity confinement)
+    float m_injectRate{ 5.f };         // szybkość wstrzykiwania gęstości (ZMNIEJSZONA)
+    float m_injectVelocity{ 8.0f };    // początkowa prędkość dymu w górę
+    int m_injectRadius{ 1 };
     bool m_injectCylinder{ true };
 
-    std::vector<float> m_u, m_v, m_w, m_p, m_s, m_T;
-    std::vector<float> m_uTmp, m_vTmp, m_wTmp, m_sTmp, m_TTmp, m_pTmp;
+    // Pola płynu (na siatce)
+    std::vector<float> m_velocityX, m_velocityY, m_velocityZ;  // prędkość (składowe X,Y,Z)
+    std::vector<float> m_pressure;                             // ciśnienie (solver nieściśliwości)
+    std::vector<float> m_density;       // stężenie dymu 0–1 (udział w komórce), nie g/m³
+    std::vector<float> m_temperature;                           // temperatura
+    // Bufory tymczasowe: zapis nowych wartości w krokach (adwekcja, dyfuzja, pressure).
+    // Nie da się aktualizować "w miejscu" – potrzebne są stare wartości dla wszystkich komórek.
+    std::vector<float> m_tmpVelocityX, m_tmpVelocityY, m_tmpVelocityZ;
+    std::vector<float> m_tmpDensity, m_tmpTemperature, m_tmpPressure;
     std::vector<uint8_t> m_solid;
 
     int flidx(int i, int j, int k) const { return i + j * m_nx + k * m_nx * m_ny; }
@@ -124,10 +158,26 @@ private:
     void injectSmoke(float dt);
     void diffuse(float dt);
     void coolTemperature(float dt);
+    void dissipate(float dt);
+    void applyVelocityDissipation(float dt);
     void addBuoyancyGravity(float dt);
+    void addSmallScaleTurbulence(float dt);
+    void addTurbulence(float dt);
+    void addVorticityConfinement(float dt);
     void advect(float dt);
     void pressureSolve(int iterations);
     void project();
 
     float sampleTrilinear(const std::vector<float>& f, float cx, float cy, float cz) const;
+    float catmullRom1D(float q0, float q1, float q2, float q3, float t) const;
+    float catmullRom3D(const std::vector<float>& f, float cx, float cy, float cz) const;
+
+    float noise3D(float x, float y, float z) const;
+    glm::vec3 curlNoise3D(float x, float y, float z) const;
+    
+    float m_time{ 0.f };
+    float m_accumulator = 0.f;
+    const float FIXED_DT = 1.f / 60.f;  // 60Hz physics tick
+    const float MAX_DT = 0.25f;         // Prevent spiral of death
+    
 };
