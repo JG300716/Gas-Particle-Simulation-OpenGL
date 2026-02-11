@@ -34,12 +34,10 @@ bool Application::Initialize(int windowWidth, int windowHeight, const char* wind
 
     Logger::init("");
 
-    // Inicjalizacja GLFW
     if (!initializeGLFW()) {
         return false;
     }
     
-    // Utworzenie okna
     m_window = glfwCreateWindow(m_windowWidth, m_windowHeight, windowTitle, nullptr, nullptr);
     if (!m_window) {
         std::cerr << "Failed to create GLFW window" << std::endl;
@@ -54,21 +52,18 @@ bool Application::Initialize(int windowWidth, int windowHeight, const char* wind
     glfwSetScrollCallback(m_window, scroll_callback);
     glfwSetInputMode(m_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     
-    // Inicjalizacja OpenGL/GLAD
     if (!initializeOpenGL()) {
         glfwDestroyWindow(m_window);
         glfwTerminate();
         return false;
     }
     
-    // Inicjalizacja ImGui
     if (!initializeImGui()) {
         glfwDestroyWindow(m_window);
         glfwTerminate();
         return false;
     }
     
-    // Inicjalizacja renderera i symulacji
     if (!initializeSimulation()) {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -87,8 +82,6 @@ bool Application::initializeGLFW() {
         std::cerr << "Failed to initialize GLFW" << std::endl;
         return false;
     }
-    
-    // Konfiguracja GLFW
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -97,13 +90,11 @@ bool Application::initializeGLFW() {
 }
 
 bool Application::initializeOpenGL() {
-    // Inicjalizacja GLAD
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         std::cerr << "Failed to initialize GLAD" << std::endl;
         return false;
     }
     
-    // Konfiguracja OpenGL
     glViewport(0, 0, m_windowWidth, m_windowHeight);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -114,14 +105,12 @@ bool Application::initializeOpenGL() {
 }
 
 bool Application::initializeImGui() {
-    // Inicjalizacja ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     
-    // Setup Platform/Renderer backends
     if (!ImGui_ImplGlfw_InitForOpenGL(m_window, true)) {
         std::cerr << "Failed to initialize ImGui GLFW backend" << std::endl;
         return false;
@@ -147,7 +136,7 @@ bool Application::initializeSimulation() {
         std::cerr << "Failed to initialize simulation" << std::endl;
         return false;
     }
-    m_simulation.setSpawnerPosition(glm::vec3(0.f, -8.f, 0.f));
+    m_simulation.setSpawnerPosition(m_simulation.getSpawnerPosition());
 
     m_camera.setPosition(glm::vec3(0.0f, 8.0f, 40.0f));
     m_camera.rotate(-90.0f, -15.0f);
@@ -167,31 +156,23 @@ void Application::Run() {
     while (!glfwWindowShouldClose(m_window)) {
         auto frameStart = std::chrono::high_resolution_clock::now();
         
-        // Oblicz deltaTime
         float currentTime = static_cast<float>(glfwGetTime());
         float deltaTime = currentTime - lastTime;
         lastTime = currentTime;
         
-        // Obsługa zdarzeń
         glfwPollEvents();
         
-        // Zmierz czas renderowania
         auto renderStart = std::chrono::high_resolution_clock::now();
-        
-        // Aktualizacja i renderowanie
         updateFrame(deltaTime);
         renderFrame();
         
-        // Zmierz czas renderowania
         auto renderEnd = std::chrono::high_resolution_clock::now();
         float renderTime = std::chrono::duration<float, std::milli>(renderEnd - renderStart).count();
         m_lastRenderTime = renderTime;
         m_lastFrameTime = deltaTime * 1000.0f; // Konwersja do ms
         
-        // Zamiana buforów
         glfwSwapBuffers(m_window);
         
-        // Limit FPS (0 = bez limitu)
         if (m_maxFps > 0) {
             auto frameEnd = std::chrono::high_resolution_clock::now();
             double frameElapsed = std::chrono::duration<double>(frameEnd - frameStart).count();
@@ -205,48 +186,33 @@ void Application::Run() {
 }
 
 void Application::updateFrame(float deltaTime) {
-    // Rozpocznij nową ramkę ImGui
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
     
-    // Uruchom symulację
     m_simulation.run(deltaTime);
     
-    // Renderuj UI (wszystko w jednym oknie)
     ImGuiControls::renderAllControls(m_simulation, m_camera, m_renderer, this);
-    
-    // Renderuj overlay z wydajnością
     ImGuiControls::renderPerformanceOverlay(m_lastFrameTime, m_lastRenderTime);
-    
-    // Obsługa klawiatury dla kamery
     processInput(deltaTime);
 }
 
 void Application::renderFrame() {
-    // Aktualizuj macierze kamery
     float aspect = static_cast<float>(m_windowWidth) / static_cast<float>(m_windowHeight);
     m_renderer.setProjection(m_camera.getProjectionMatrix(aspect));
     m_renderer.setView(m_camera.getViewMatrix());
     
-    // Renderuj scenę
     m_renderer.clear(0.1f, 0.1f, 0.15f, 1.0f);
-    
     std::vector<ObstacleDesc> obstaclesForRender;
     for (const auto& o : m_simulation.getObstacles()) {
         obstaclesForRender.push_back({ o.position, o.size, o.rotation, o.scale });
     }
     m_renderer.renderObstacles(obstaclesForRender);
-
     m_renderer.renderCampfire(m_simulation.getSpawnerPosition(), m_campfireWireframe);
-
     m_renderer.renderLightIndicator();
-
     m_renderer.renderGridWireframe(m_simulation.getGrid());
-
     m_renderer.renderSmokeVolume(m_simulation, m_showTempMode);
     
-    // Renderuj ImGui
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
@@ -276,7 +242,6 @@ void Application::Clean() {
 void Application::framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
     
-    // Zaktualizuj rozmiar okna w aplikacji
     Application* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
     if (app) {
         app->m_windowWidth = width;
@@ -288,7 +253,6 @@ void Application::mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     Application* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
     if (!app) return;
     
-    // Nie obracaj kamery jeśli ESC jest wciśnięty
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
         return;
     }

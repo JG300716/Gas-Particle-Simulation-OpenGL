@@ -37,7 +37,6 @@ bool Shader::loadFromFile(const std::string& vertexPath, const std::string& frag
 }
 
 bool Shader::loadFromSource(const std::string& vertexSource, const std::string& fragmentSource) {
-    // Kompiluj shadery
     GLuint vertexShader = compileShader(GL_VERTEX_SHADER, vertexSource);
     if (vertexShader == 0) {
         return false;
@@ -49,7 +48,6 @@ bool Shader::loadFromSource(const std::string& vertexSource, const std::string& 
         return false;
     }
 
-    // Linkuj program
     if (!linkProgram(vertexShader, fragmentShader)) {
         glDeleteShader(vertexShader);
         glDeleteShader(fragmentShader);

@@ -10,16 +10,10 @@ public:
     Shader();
     ~Shader();
 
-    // Ładuje shader z kodu źródłowego
     bool loadFromSource(const std::string& vertexSource, const std::string& fragmentSource);
-    
-    // Ładuje shader z plików
     bool loadFromFile(const std::string& vertexPath, const std::string& fragmentPath);
-    
-    // Używa shadera
     void use() const;
     
-    // Ustawia uniformy
     void setBool(const std::string& name, bool value) const;
     void setInt(const std::string& name, int value) const;
     void setFloat(const std::string& name, float value) const;
@@ -33,10 +27,7 @@ public:
 private:
     GLuint m_programID;
     
-    // Kompiluje shader
     GLuint compileShader(GLenum type, const std::string& source);
-    // Linkuje program
     bool linkProgram(GLuint vertexShader, GLuint fragmentShader);
-    // Sprawdza błędy kompilacji
     bool checkCompileErrors(GLuint shader, const std::string& type);
 };

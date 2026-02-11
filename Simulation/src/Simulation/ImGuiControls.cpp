@@ -37,26 +37,6 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
         simulation.setGridSize(gridSizeX, gridSizeY, gridSizeZ);
     }
     
-    // Ambient pressure
-    float ambientPressure = simulation.getAmbientPressure();
-    if (ImGui::SliderFloat("[hPa]", &ambientPressure, 900.0f, 1100.0f)) {
-        simulation.setAmbientPressure(ambientPressure);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Reset##Pressure")) {
-        simulation.setAmbientPressure(1013.25f);
-    }
-    
-    // Gravity
-    float gravity = simulation.getGravity();
-    if (ImGui::SliderFloat("[m/s^2]", &gravity, -20.0f, 20.0f)) {
-        simulation.setGravity(gravity);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Reset##Gravity")) {
-        simulation.setGravity(-9.81f);
-    }
-
     // Time scale
     ImGui::Separator();
     float timeScale = simulation.getTimeScale();
@@ -87,12 +67,17 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
     if (ImGui::Button("5.0x")) {
         simulation.setTimeScale(5.0f);
     }
+
+    UINT8 jacobiIters = simulation.getJacobiIterations();
+    if (ImGui::SliderScalar("Pressure solver iters", ImGuiDataType_U8, &jacobiIters, &SmokeSimulation::minJacobiIterationsValue, &SmokeSimulation::maxJacobiIterationsValue)) {
+        simulation.setJacobiIterations(jacobiIters);
+    }
     
     // Źródło dymu (spawner / ognisko)
     ImGui::Separator();
-    glm::vec3 spawnerPos = simulation.getSpawnerPosition();
-    float spawnerPosArray[3] = { spawnerPos.x, spawnerPos.y, spawnerPos.z };
-    if (ImGui::InputFloat3("Spawner (dym)", spawnerPosArray)) {
+    glm::ivec3 spawnerPos = simulation.getSpawnerPosition();
+    int spawnerPosArray[3] = { spawnerPos.x, spawnerPos.y, spawnerPos.z };
+    if (ImGui::InputInt3("Spawner (dym)", spawnerPosArray)) {
         simulation.setSpawnerPosition(glm::vec3(spawnerPosArray[0], spawnerPosArray[1], spawnerPosArray[2]));
     }
     // Parametry wstrzykiwania
@@ -101,8 +86,8 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
     if (ImGui::SliderFloat("Inject rate", &injRate, 0.f, 30.f)) simulation.setInjectRate(injRate);
     float injVel = simulation.getInjectVelocity();
     if (ImGui::SliderFloat("Inject velocity", &injVel, 0.f, 15.f)) simulation.setInjectVelocity(injVel);
-    bool injectCyl = simulation.getInjectCylinder();
-    if (ImGui::Checkbox("Cylinder shape", &injectCyl)) simulation.setInjectCylinder(injectCyl);
+    int injRadius = simulation.getInjectRadius();
+    if (ImGui::SliderInt("Inject radius", &injRadius, 1, 10)) simulation.setInjectRadius(injRadius);
     
     if (ImGui::Button("Clear Smoke")) {
         simulation.clearSmoke();
@@ -131,14 +116,10 @@ void ImGuiControls::renderAllControls(SmokeSimulation& simulation, Camera& camer
     ImGui::Text("Motion:");
     float diff = simulation.getDiffusion();
     if (ImGui::SliderFloat("Diffusion", &diff, 0.f, 1.f)) simulation.setDiffusion(diff);
-    float dissip = simulation.getDissipation();
-    if (ImGui::SliderFloat("Dissipation", &dissip, 0.f, 0.5f)) simulation.setDissipation(dissip);
     float velDissip = simulation.getVelocityDissipation();
     if (ImGui::SliderFloat("Velocity drag", &velDissip, 0.f, 1.5f)) simulation.setVelocityDissipation(velDissip);
     float turb = simulation.getTurbulence();
     if (ImGui::SliderFloat("Turbulence", &turb, 0.f, 2.f)) simulation.setTurbulence(turb);
-    float smallTurb = simulation.getSmallScaleTurbulenceGain();
-    if (ImGui::SliderFloat("Small-scale turbulence", &smallTurb, 0.f, 2.f)) simulation.setSmallScaleTurbulenceGain(smallTurb);
     float vort = simulation.getVorticity();
     if (ImGui::SliderFloat("Vorticity", &vort, 0.f, 3.f)) simulation.setVorticity(vort);
 

@@ -12,14 +12,19 @@ namespace {
     constexpr unsigned DBG_LOG_INTERVAL = 60;
     glm::ivec3 s_dbgInjectSp(-1, -1, -1);
 
+#if defined(_DEBUG) || defined(DEBUG)
     void dbgLog(const char* tag, const std::string& msg) {
         Logger::logWithTime(tag, msg);
     }
+#else
+    void dbgLog(const char* tag, const std::string& msg){}
+#endif
+    
+    
 }
 
 SmokeSimulation::SmokeSimulation()
-    : m_grid(20, 20, 20),
-      m_spawnerPosition(0.f, 0.f, 0.f)
+    : m_grid(20, 20, 20)
 {
     
 }
@@ -42,7 +47,7 @@ bool SmokeSimulation::initialize(const UINT32& simulationWidth, const UINT32& si
     m_ceiling.thickness = 1.f;
     m_ceiling.holeCenter = glm::vec2(0.f, 0.f);
     m_ceiling.holeSize = glm::vec2(m_ceiling.width * 0.3f, m_ceiling.depth * 0.3f);
-    m_ceiling.enabled = true;
+    m_ceiling.enabled = false;
 
     buildSolidMask();
     std::ostringstream os;
@@ -161,34 +166,34 @@ float SmokeSimulation::sampleTrilinear(const std::vector<float>& f, float cx, fl
     cy = std::max(0.f, std::min(static_cast<float>(m_ny) - 1.001f, cy));
     cz = std::max(0.f, std::min(static_cast<float>(m_nz) - 1.001f, cz));
     
-    int i0 = static_cast<int>(std::floor(cx));
-    int j0 = static_cast<int>(std::floor(cy));
-    int k0 = static_cast<int>(std::floor(cz));
+    const int i0 = static_cast<int>(std::floor(cx));
+    const int j0 = static_cast<int>(std::floor(cy));
+    const int k0 = static_cast<int>(std::floor(cz));
     
-    int i1 = std::min(i0 + 1, m_nx - 1);
-    int j1 = std::min(j0 + 1, m_ny - 1);
-    int k1 = std::min(k0 + 1, m_nz - 1);
+    const int i1 = std::min(i0 + 1, m_nx - 1);
+    const int j1 = std::min(j0 + 1, m_ny - 1);
+    const int k1 = std::min(k0 + 1, m_nz - 1);
     
-    float fx = cx - i0;
-    float fy = cy - j0;
-    float fz = cz - k0;
+    const float fx = cx - i0;
+    const float fy = cy - j0;
+    const float fz = cz - k0;
     
-    float v000 = f[flidx(i0, j0, k0)];
-    float v100 = f[flidx(i1, j0, k0)];
-    float v010 = f[flidx(i0, j1, k0)];
-    float v110 = f[flidx(i1, j1, k0)];
-    float v001 = f[flidx(i0, j0, k1)];
-    float v101 = f[flidx(i1, j0, k1)];
-    float v011 = f[flidx(i0, j1, k1)];
-    float v111 = f[flidx(i1, j1, k1)];
+    const float v000 = f[flidx(i0, j0, k0)];
+    const float v100 = f[flidx(i1, j0, k0)];
+    const float v010 = f[flidx(i0, j1, k0)];
+    const float v110 = f[flidx(i1, j1, k0)];
+    const float v001 = f[flidx(i0, j0, k1)];
+    const float v101 = f[flidx(i1, j0, k1)];
+    const float v011 = f[flidx(i0, j1, k1)];
+    const float v111 = f[flidx(i1, j1, k1)];
     
-    float v00 = v000 + fx * (v100 - v000);
-    float v10 = v010 + fx * (v110 - v010);
-    float v01 = v001 + fx * (v101 - v001);
-    float v11 = v011 + fx * (v111 - v011);
+    const float v00 = v000 + fx * (v100 - v000);
+    const float v10 = v010 + fx * (v110 - v010);
+    const float v01 = v001 + fx * (v101 - v001);
+    const float v11 = v011 + fx * (v111 - v011);
     
-    float v0 = v00 + fy * (v10 - v00);
-    float v1 = v01 + fy * (v11 - v01);
+    const float v0 = v00 + fy * (v10 - v00);
+    const float v1 = v01 + fy * (v11 - v01);
     
     return v0 + fz * (v1 - v0);
 }
@@ -219,7 +224,7 @@ void SmokeSimulation::runFluid(float dt) {
     advect(dt);
     diffuse(dt);
 
-    pressureSolve(30);
+    pressureSolve(m_numJacobiIterations);
     project();
 
     applyVelocityDissipation(dt);
@@ -290,13 +295,8 @@ void SmokeSimulation::injectSmoke(float dt) {
                 if (isSolid(i, j, k)) continue;
                 
                 float fdx = static_cast<float>(i - sp.x), fdz = static_cast<float>(k - sp.z);
-                float horiz2 = fdx * fdx + fdz * fdz;
-                if (m_injectCylinder) {
-                    if (horiz2 > R2) continue;
-                } else {
-                    float fdy = static_cast<float>(j - sp.y);
-                    if (fdx * fdx + fdy * fdy + fdz * fdz > R2) continue;
-                }
+                float fdy = static_cast<float>(j - sp.y);
+                if (fdx * fdx + fdy * fdy + fdz * fdz > R2) continue;
                 
                 size_t id = flidx(i, j, k);
                 float oldDensity = m_density[id];
@@ -305,19 +305,12 @@ void SmokeSimulation::injectSmoke(float dt) {
                 float newDensity = std::min(1.f, oldDensity + densityRate);
                 m_density[id] = newDensity;
                 
-                // Ustaw wysoką temperaturę (zawsze w strefie wstrzykiwania)
                 m_temperature[id] = T_inj;
                 
                 if (m_velocityY[id] < m_injectVelocity) {
                     float targetV = m_injectVelocity;
                     m_velocityY[id] = m_velocityY[id] + (targetV - m_velocityY[id]) * std::min(1.0f, dt * 10.0f);
                 }
-                // glm::vec3 swirl = curlNoise3D(i * 0.3f, j * 0.3f + m_time, k * 0.3f);
-                // float swirlStrength = m_injectVelocity * 0.03f;
-                //
-                // m_velocityX[id] += swirl.x * swirlStrength * densityRate;
-                // m_velocityY[id] += swirl.y * swirlStrength * densityRate * 0.3f;
-                // m_velocityZ[id] += swirl.z * swirlStrength * densityRate;
                 
                 ++injected;
             }
@@ -333,12 +326,12 @@ void SmokeSimulation::injectSmoke(float dt) {
 }
 
 void SmokeSimulation::clearSmoke() {
-    std::fill(m_density.begin(), m_density.end(), 0.f);
-    std::fill(m_temperature.begin(), m_temperature.end(), m_Tamb);
-    std::fill(m_velocityX.begin(), m_velocityX.end(), 0.f);
-    std::fill(m_velocityY.begin(), m_velocityY.end(), 0.f);
-    std::fill(m_velocityZ.begin(), m_velocityZ.end(), 0.f);
-    std::fill(m_pressure.begin(), m_pressure.end(), 0.f);
+    std::ranges::fill(m_density.begin(), m_density.end(), 0.f);
+    std::ranges::fill(m_temperature.begin(), m_temperature.end(), m_Tamb);
+    std::ranges::fill(m_velocityX.begin(), m_velocityX.end(), 0.f);
+    std::ranges::fill(m_velocityY.begin(), m_velocityY.end(), 0.f);
+    std::ranges::fill(m_velocityZ.begin(), m_velocityZ.end(), 0.f);
+    std::ranges::fill(m_pressure.begin(), m_pressure.end(), 0.f);
 }
 
 void SmokeSimulation::diffuse(float dt) {
@@ -731,7 +724,7 @@ void SmokeSimulation::pressureSolve(int iterations) {
                 div[id] = ((uR - uL) + (vT - vB) + (wF - wK)) / dx;
             }
 
-    std::fill(m_pressure.begin(), m_pressure.end(), 0.f);
+    std::ranges::fill(m_pressure.begin(), m_pressure.end(), 0.f);
     const float dx2 = dx * dx;
     auto pNeighbor = [this](int i, int j, int k) {
         if (i < 0 || i >= m_nx || j < 0 || j >= m_ny || k < 0 || k >= m_nz) return 0.f;

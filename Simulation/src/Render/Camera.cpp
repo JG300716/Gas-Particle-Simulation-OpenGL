@@ -7,7 +7,7 @@ Camera::Camera()
       m_pitch(0.0f),
       m_fov(45.0f),
       m_nearPlane(0.1f),
-      m_farPlane(1000.0f) { // Zwiększony far plane dla większych grid'ów
+      m_farPlane(1000.0f) {
     updateVectors();
 }
 
@@ -18,8 +18,6 @@ void Camera::setPosition(const glm::vec3& position) {
 void Camera::rotate(float yaw, float pitch) {
     m_yaw = yaw;
     m_pitch = pitch;
-    
-    // Ogranicz pitch do zakresu [-89, 89] stopni
     m_pitch = std::clamp(m_pitch, -89.0f, 89.0f);
     
     updateVectors();
@@ -28,8 +26,6 @@ void Camera::rotate(float yaw, float pitch) {
 void Camera::addRotation(float deltaYaw, float deltaPitch) {
     m_yaw += deltaYaw;
     m_pitch += deltaPitch;
-    
-    // Ogranicz pitch do zakresu [-89, 89] stopni
     m_pitch = std::clamp(m_pitch, -89.0f, 89.0f);
     
     updateVectors();
@@ -61,14 +57,12 @@ glm::vec3 Camera::getUp() const {
 }
 
 void Camera::updateVectors() {
-    // Oblicz nowy wektor forward
     glm::vec3 forward;
     forward.x = cos(glm::radians(m_yaw)) * cos(glm::radians(m_pitch));
     forward.y = sin(glm::radians(m_pitch));
     forward.z = sin(glm::radians(m_yaw)) * cos(glm::radians(m_pitch));
     m_forward = glm::normalize(forward);
     
-    // Oblicz wektor right i up
     m_right = glm::normalize(glm::cross(m_forward, glm::vec3(0.0f, 1.0f, 0.0f)));
     m_up = glm::normalize(glm::cross(m_right, m_forward));
 }

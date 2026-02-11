@@ -4,25 +4,24 @@
 
 Grid::Grid(int sizeX, int sizeY, int sizeZ)
     : m_sizeX(sizeX), m_sizeY(sizeY), m_sizeZ(sizeZ) {
-    // Granice grid'a zdefiniowane przez XYZ (centrowany wokół (0,0,0))
-    float hx = m_sizeX * 0.5f;
-    float hy = m_sizeY * 0.5f;
-    float hz = m_sizeZ * 0.5f;
+    const float hx = m_sizeX * 0.5f;
+    const float hy = m_sizeY * 0.5f;
+    const float hz = m_sizeZ * 0.5f;
     m_minBounds = glm::vec3(-hx, -hy, -hz);
     m_maxBounds = glm::vec3(hx, hy, hz);
     m_center = glm::vec3(0.0f, 0.0f, 0.0f);
 }
 
 glm::ivec3 Grid::worldToGrid(const glm::vec3& worldPos) const {
-    glm::vec3 localPos = worldPos - m_minBounds;
+    const glm::vec3 localPos = worldPos - m_minBounds;
     int x = static_cast<int>(std::floor(localPos.x));
     int y = static_cast<int>(std::floor(localPos.y));
     int z = static_cast<int>(std::floor(localPos.z));
-    return glm::ivec3(x, y, z);
+    return {x, y, z};
 }
 
 glm::vec3 Grid::gridToWorld(const glm::ivec3& gridPos) const {
-    glm::vec3 localPos(
+    const glm::vec3 localPos(
         static_cast<float>(gridPos.x) + 0.5f,
         static_cast<float>(gridPos.y) + 0.5f,
         static_cast<float>(gridPos.z) + 0.5f
@@ -46,43 +45,43 @@ std::vector<glm::vec3> Grid::getGridWireframeVertices() const {
     std::vector<glm::vec3> vertices;
     
     // Dolna płaszczyzna (4 krawędzie)
-    vertices.push_back(glm::vec3(m_minBounds.x, m_minBounds.y, m_minBounds.z)); // 0
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_minBounds.y, m_minBounds.z)); // 1
+    vertices.emplace_back(m_minBounds.x, m_minBounds.y, m_minBounds.z); // 0
+    vertices.emplace_back(m_maxBounds.x, m_minBounds.y, m_minBounds.z); // 1
     
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_minBounds.y, m_minBounds.z)); // 1
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_minBounds.y, m_maxBounds.z)); // 2
+    vertices.emplace_back(m_maxBounds.x, m_minBounds.y, m_minBounds.z); // 1
+    vertices.emplace_back(m_maxBounds.x, m_minBounds.y, m_maxBounds.z); // 2
     
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_minBounds.y, m_maxBounds.z)); // 2
-    vertices.push_back(glm::vec3(m_minBounds.x, m_minBounds.y, m_maxBounds.z)); // 3
+    vertices.emplace_back(m_maxBounds.x, m_minBounds.y, m_maxBounds.z); // 2
+    vertices.emplace_back(m_minBounds.x, m_minBounds.y, m_maxBounds.z); // 3
     
-    vertices.push_back(glm::vec3(m_minBounds.x, m_minBounds.y, m_maxBounds.z)); // 3
-    vertices.push_back(glm::vec3(m_minBounds.x, m_minBounds.y, m_minBounds.z)); // 0
+    vertices.emplace_back(m_minBounds.x, m_minBounds.y, m_maxBounds.z); // 3
+    vertices.emplace_back(m_minBounds.x, m_minBounds.y, m_minBounds.z); // 0
     
     // Górna płaszczyzna (4 krawędzie)
-    vertices.push_back(glm::vec3(m_minBounds.x, m_maxBounds.y, m_minBounds.z)); // 4
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_maxBounds.y, m_minBounds.z)); // 5
+    vertices.emplace_back(m_minBounds.x, m_maxBounds.y, m_minBounds.z); // 4
+    vertices.emplace_back(m_maxBounds.x, m_maxBounds.y, m_minBounds.z); // 5
     
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_maxBounds.y, m_minBounds.z)); // 5
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_maxBounds.y, m_maxBounds.z)); // 6
+    vertices.emplace_back(m_maxBounds.x, m_maxBounds.y, m_minBounds.z); // 5
+    vertices.emplace_back(m_maxBounds.x, m_maxBounds.y, m_maxBounds.z); // 6
     
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_maxBounds.y, m_maxBounds.z)); // 6
-    vertices.push_back(glm::vec3(m_minBounds.x, m_maxBounds.y, m_maxBounds.z)); // 7
+    vertices.emplace_back(m_maxBounds.x, m_maxBounds.y, m_maxBounds.z); // 6
+    vertices.emplace_back(m_minBounds.x, m_maxBounds.y, m_maxBounds.z); // 7
     
-    vertices.push_back(glm::vec3(m_minBounds.x, m_maxBounds.y, m_maxBounds.z)); // 7
-    vertices.push_back(glm::vec3(m_minBounds.x, m_maxBounds.y, m_minBounds.z)); // 4
+    vertices.emplace_back(m_minBounds.x, m_maxBounds.y, m_maxBounds.z); // 7
+    vertices.emplace_back(m_minBounds.x, m_maxBounds.y, m_minBounds.z); // 4
     
     // Pionowe krawędzie (4 krawędzie)
-    vertices.push_back(glm::vec3(m_minBounds.x, m_minBounds.y, m_minBounds.z)); // 0
-    vertices.push_back(glm::vec3(m_minBounds.x, m_maxBounds.y, m_minBounds.z)); // 4
+    vertices.emplace_back(m_minBounds.x, m_minBounds.y, m_minBounds.z); // 0
+    vertices.emplace_back(m_minBounds.x, m_maxBounds.y, m_minBounds.z); // 4
     
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_minBounds.y, m_minBounds.z)); // 1
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_maxBounds.y, m_minBounds.z)); // 5
+    vertices.emplace_back(m_maxBounds.x, m_minBounds.y, m_minBounds.z); // 1
+    vertices.emplace_back(m_maxBounds.x, m_maxBounds.y, m_minBounds.z); // 5
     
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_minBounds.y, m_maxBounds.z)); // 2
-    vertices.push_back(glm::vec3(m_maxBounds.x, m_maxBounds.y, m_maxBounds.z)); // 6
+    vertices.emplace_back(m_maxBounds.x, m_minBounds.y, m_maxBounds.z); // 2
+    vertices.emplace_back(m_maxBounds.x, m_maxBounds.y, m_maxBounds.z); // 6
     
-    vertices.push_back(glm::vec3(m_minBounds.x, m_minBounds.y, m_maxBounds.z)); // 3
-    vertices.push_back(glm::vec3(m_minBounds.x, m_maxBounds.y, m_maxBounds.z)); // 7
+    vertices.emplace_back(m_minBounds.x, m_minBounds.y, m_maxBounds.z); // 3
+    vertices.emplace_back(m_minBounds.x, m_maxBounds.y, m_maxBounds.z); // 7
     
     return vertices;
 }

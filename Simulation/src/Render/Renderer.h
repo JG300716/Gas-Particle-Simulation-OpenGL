@@ -17,15 +17,13 @@ struct ObstacleDesc {
 };
 
 struct LightSettings {
-    float yaw{ 45.0f };      // kąt obrotu w poziomie (stopnie)
-    float pitch{ 60.0f };    // kąt obrotu w pionie (stopnie)
-    float distance{ 15.0f }; // odległość od środka sceny
-    glm::vec3 color{ 1.0f, 1.0f, 0.8f }; // kolor światła
+    float yaw{ 45.0f };
+    float pitch{ 60.0f };
+    float distance{ 15.0f };
+    glm::vec3 color{ 1.0f, 1.0f, 0.8f };
     bool showIndicator{ true };
     
-    // Oblicz kierunek światła z kątów (od pozycji do środka)
     glm::vec3 getDirection() const;
-    // Oblicz pozycję światła w świecie
     glm::vec3 getPosition() const;
 };
 

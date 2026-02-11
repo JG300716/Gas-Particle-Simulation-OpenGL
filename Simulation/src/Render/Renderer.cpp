@@ -8,9 +8,7 @@
 #include <filesystem>
 #include <cmath>
 
-// === LightSettings implementation ===
 glm::vec3 LightSettings::getDirection() const {
-    // Kierunek OD powierzchni DO światła (dla obliczeń Lamberta)
     return glm::normalize(getPosition());
 }
 
@@ -239,7 +237,6 @@ void Renderer::initSphereBuffers() {
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
     
-    // Generuj wierzchołki sfery
     for (int i = 0; i <= stacks; ++i) {
         float phi = glm::pi<float>() * float(i) / float(stacks);
         for (int j = 0; j <= slices; ++j) {
@@ -253,7 +250,6 @@ void Renderer::initSphereBuffers() {
         }
     }
     
-    // Generuj indeksy
     for (int i = 0; i < stacks; ++i) {
         for (int j = 0; j < slices; ++j) {
             int first = i * (slices + 1) + j;
@@ -292,14 +288,13 @@ void Renderer::renderLightIndicator() {
     
     glm::vec3 lightPos = m_light.getPosition();
     
-    // Przygotuj macierz modelu dla sfery
     glm::mat4 model = glm::translate(glm::mat4(1.0f), lightPos);
-    model = glm::scale(model, glm::vec3(1.0f)); // rozmiar sfery
+    model = glm::scale(model, glm::vec3(1.0f));
     
     m_obstacleShader.use();
     m_obstacleShader.setMat4("uProjection", m_projection);
     m_obstacleShader.setMat4("uView", m_view * model);
-    m_obstacleShader.setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f)); // żółty kolor
+    m_obstacleShader.setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f));
     
     glBindVertexArray(m_sphereVAO);
     glDrawElements(GL_TRIANGLES, m_sphereIndexCount, GL_UNSIGNED_INT, 0);
@@ -312,7 +307,7 @@ void Renderer::renderObstacles(const std::vector<ObstacleDesc>& obstacles) {
     m_obstacleShader.use();
     m_obstacleShader.setMat4("uProjection", m_projection);
     m_obstacleShader.setMat4("uView", m_view);
-    m_obstacleShader.setVec3("uColor", glm::vec3(0.5f, 0.5f, 0.5f)); // szary kolor dla przeszkód
+    m_obstacleShader.setVec3("uColor", glm::vec3(0.5f, 0.5f, 0.5f));
 
     std::vector<float> vertices;
     vertices.reserve(36 * obstacles.size());
@@ -379,7 +374,6 @@ void Renderer::renderGridWireframe(const Grid& grid) {
     m_gridShader.setMat4("uProjection", m_projection);
     m_gridShader.setMat4("uView", m_view);
 
-    // Pobierz wierzchołki grid'a
     std::vector<glm::vec3> vertices = grid.getGridWireframeVertices();
 
     if (vertices.empty()) {
@@ -390,7 +384,6 @@ void Renderer::renderGridWireframe(const Grid& grid) {
     glBindBuffer(GL_ARRAY_BUFFER, m_gridVBO);
     glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(glm::vec3), vertices.data(), GL_DYNAMIC_DRAW);
 
-    // Renderuj jako linie
     glLineWidth(1.0f);
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices.size()));
 

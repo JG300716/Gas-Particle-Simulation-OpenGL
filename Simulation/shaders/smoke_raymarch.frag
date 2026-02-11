@@ -82,7 +82,6 @@ void main() {
         float tNorm = accT / weightSum;
         col = tempToColor(tNorm);
     } else {
-        // Szary/czarny w zależności od gęstości: niska gęstość = ciemny szary, wysoka = jaśniejszy szary
         col = mix(vec3(0.3, 0.3, 0.3), vec3(0.8, 0.8, 0.8), acc);
     }
     FragColor = vec4(col, acc * 0.9);

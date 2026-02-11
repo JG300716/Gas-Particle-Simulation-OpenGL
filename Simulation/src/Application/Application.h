@@ -11,17 +11,11 @@ public:
     Application();
     ~Application();
 
-    // Inicjalizacja aplikacji
     bool Initialize(int windowWidth = 680, int windowHeight = 1080, const char* windowTitle = "Symulacja Dymu");
-    
-    // Uruchomienie głównej pętli
     void Run();
-    
-    // Czyszczenie zasobów
     void Clean();
 
-    // Maksymalny refresh rate (0 = bez limitu)
-    int getMaxFps() const { return m_maxFps; }
+    [[nodiscard]] int getMaxFps() const { return m_maxFps; }
     void setMaxFps(int fps) { m_maxFps = (fps >= 0) ? fps : 0; }
 
 private:
@@ -34,11 +28,9 @@ private:
     int m_windowHeight;
     bool m_initialized;
     
-    // Performance tracking
     float m_lastFrameTime;
     float m_lastRenderTime;
 
-    // Limit FPS (0 = bez limitu)
     int m_maxFps{ 0 };
 
     bool m_showTempMode{ false };
@@ -46,36 +38,19 @@ private:
     int m_prevF1{ GLFW_RELEASE };
     int m_prevF2{ GLFW_RELEASE };
 
-    // Kontrola kamery
     bool m_firstMouse;
     float m_lastMouseX;
     float m_lastMouseY;
     
-    // Callback dla zmiany rozmiaru okna
     static void framebuffer_size_callback(GLFWwindow* window, int width, int height);
-    // Callback dla myszy
     static void mouse_callback(GLFWwindow* window, double xpos, double ypos);
-    // Callback dla scrolla
     static void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
     
-    // Inicjalizacja GLFW
     bool initializeGLFW();
-    
-    // Inicjalizacja OpenGL/GLAD
     bool initializeOpenGL();
-    
-    // Inicjalizacja ImGui
     bool initializeImGui();
-    
-    // Inicjalizacja renderera i symulacji
     bool initializeSimulation();
-    
-    // Aktualizacja jednej ramki
     void updateFrame(float deltaTime);
-    
-    // Renderowanie jednej ramki
     void renderFrame();
-    
-    // Obsługa wejścia
     void processInput(float deltaTime);
 };

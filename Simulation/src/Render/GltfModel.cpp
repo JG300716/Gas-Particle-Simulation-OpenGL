@@ -11,93 +11,93 @@
 
 namespace {
 
-using namespace tinygltf;
+    using namespace tinygltf;
 
-bool readAttributeFloats(const Model& model, int accIndex, std::vector<float>& out) {
-    if (accIndex < 0 || size_t(accIndex) >= model.accessors.size()) return false;
-    const Accessor& acc = model.accessors[size_t(accIndex)];
-    if (acc.bufferView < 0 || size_t(acc.bufferView) >= model.bufferViews.size()) return false;
-    const BufferView& bv = model.bufferViews[size_t(acc.bufferView)];
-    if (bv.buffer < 0 || size_t(bv.buffer) >= model.buffers.size()) return false;
-    const Buffer& buf = model.buffers[size_t(bv.buffer)];
+    bool readAttributeFloats(const Model& model, int accIndex, std::vector<float>& out) {
+        if (accIndex < 0 || size_t(accIndex) >= model.accessors.size()) return false;
+        const Accessor& acc = model.accessors[size_t(accIndex)];
+        if (acc.bufferView < 0 || size_t(acc.bufferView) >= model.bufferViews.size()) return false;
+        const BufferView& bv = model.bufferViews[size_t(acc.bufferView)];
+        if (bv.buffer < 0 || size_t(bv.buffer) >= model.buffers.size()) return false;
+        const Buffer& buf = model.buffers[size_t(bv.buffer)];
 
-    int stride = acc.ByteStride(bv);
-    if (stride <= 0) return false;
-    int compSize = GetComponentSizeInBytes(static_cast<uint32_t>(acc.componentType));
-    int numComp = GetNumComponentsInType(static_cast<uint32_t>(acc.type));
-    if (compSize <= 0 || numComp <= 0) return false;
+        int stride = acc.ByteStride(bv);
+        if (stride <= 0) return false;
+        int compSize = GetComponentSizeInBytes(static_cast<uint32_t>(acc.componentType));
+        int numComp = GetNumComponentsInType(static_cast<uint32_t>(acc.type));
+        if (compSize <= 0 || numComp <= 0) return false;
 
-    size_t need = bv.byteOffset + acc.byteOffset + acc.count * size_t(stride);
-    if (need > buf.data.size()) return false;
+        size_t need = bv.byteOffset + acc.byteOffset + acc.count * size_t(stride);
+        if (need > buf.data.size()) return false;
 
-    out.resize(acc.count * size_t(numComp));
-    const uint8_t* base = buf.data.data() + bv.byteOffset + acc.byteOffset;
+        out.resize(acc.count * size_t(numComp));
+        const uint8_t* base = buf.data.data() + bv.byteOffset + acc.byteOffset;
 
-    if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT) {
-        for (size_t i = 0; i < acc.count; ++i) {
-            const float* src = reinterpret_cast<const float*>(base + i * size_t(stride));
-            for (int c = 0; c < numComp; ++c)
-                out[i * size_t(numComp) + size_t(c)] = src[c];
+        if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT) {
+            for (size_t i = 0; i < acc.count; ++i) {
+                const float* src = reinterpret_cast<const float*>(base + i * size_t(stride));
+                for (int c = 0; c < numComp; ++c)
+                    out[i * size_t(numComp) + size_t(c)] = src[c];
+            }
+            return true;
         }
-        return true;
-    }
-    if (acc.normalized && acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
-        for (size_t i = 0; i < acc.count; ++i) {
-            const uint16_t* src = reinterpret_cast<const uint16_t*>(base + i * size_t(stride));
-            for (int c = 0; c < numComp; ++c)
-                out[i * size_t(numComp) + size_t(c)] = src[c] / 65535.0f;
+        if (acc.normalized && acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+            for (size_t i = 0; i < acc.count; ++i) {
+                const uint16_t* src = reinterpret_cast<const uint16_t*>(base + i * size_t(stride));
+                for (int c = 0; c < numComp; ++c)
+                    out[i * size_t(numComp) + size_t(c)] = src[c] / 65535.0f;
+            }
+            return true;
         }
-        return true;
+        return false;
     }
-    return false;
-}
 
-bool readIndices(const Model& model, int accIndex, std::vector<uint32_t>& out) {
-    if (accIndex < 0 || size_t(accIndex) >= model.accessors.size()) return false;
-    const Accessor& acc = model.accessors[size_t(accIndex)];
-    if (acc.bufferView < 0 || size_t(acc.bufferView) >= model.bufferViews.size()) return false;
-    const BufferView& bv = model.bufferViews[size_t(acc.bufferView)];
-    if (bv.buffer < 0 || size_t(bv.buffer) >= model.buffers.size()) return false;
-    const Buffer& buf = model.buffers[size_t(bv.buffer)];
+    bool readIndices(const Model& model, int accIndex, std::vector<uint32_t>& out) {
+        if (accIndex < 0 || size_t(accIndex) >= model.accessors.size()) return false;
+        const Accessor& acc = model.accessors[size_t(accIndex)];
+        if (acc.bufferView < 0 || size_t(acc.bufferView) >= model.bufferViews.size()) return false;
+        const BufferView& bv = model.bufferViews[size_t(acc.bufferView)];
+        if (bv.buffer < 0 || size_t(bv.buffer) >= model.buffers.size()) return false;
+        const Buffer& buf = model.buffers[size_t(bv.buffer)];
 
-    int stride = acc.ByteStride(bv);
-    if (stride <= 0) return false;
-    size_t need = bv.byteOffset + acc.byteOffset + acc.count * size_t(stride);
-    if (need > buf.data.size()) return false;
+        int stride = acc.ByteStride(bv);
+        if (stride <= 0) return false;
+        size_t need = bv.byteOffset + acc.byteOffset + acc.count * size_t(stride);
+        if (need > buf.data.size()) return false;
 
-    out.resize(acc.count);
-    const uint8_t* base = buf.data.data() + bv.byteOffset + acc.byteOffset;
+        out.resize(acc.count);
+        const uint8_t* base = buf.data.data() + bv.byteOffset + acc.byteOffset;
 
-    if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
-        for (size_t i = 0; i < acc.count; ++i)
-            out[i] = *reinterpret_cast<const uint32_t*>(base + i * size_t(stride));
-        return true;
+        if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
+            for (size_t i = 0; i < acc.count; ++i)
+                out[i] = *reinterpret_cast<const uint32_t*>(base + i * size_t(stride));
+            return true;
+        }
+        if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+            for (size_t i = 0; i < acc.count; ++i)
+                out[i] = *reinterpret_cast<const uint16_t*>(base + i * size_t(stride));
+            return true;
+        }
+        return false;
     }
-    if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
-        for (size_t i = 0; i < acc.count; ++i)
-            out[i] = *reinterpret_cast<const uint16_t*>(base + i * size_t(stride));
-        return true;
+
+    GLuint createTextureFromImage(const tinygltf::Image& img) {
+        if (img.image.empty() || img.width <= 0 || img.height <= 0) return 0;
+        GLenum fmt = GL_RGBA;
+        if (img.component == 3) fmt = GL_RGB;
+        else if (img.component != 4) return 0;
+
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, fmt, img.width, img.height, 0, fmt, GL_UNSIGNED_BYTE, img.image.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return tex;
     }
-    return false;
-}
-
-GLuint createTextureFromImage(const tinygltf::Image& img) {
-    if (img.image.empty() || img.width <= 0 || img.height <= 0) return 0;
-    GLenum fmt = GL_RGBA;
-    if (img.component == 3) fmt = GL_RGB;
-    else if (img.component != 4) return 0;
-
-    GLuint tex = 0;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, fmt, img.width, img.height, 0, fmt, GL_UNSIGNED_BYTE, img.image.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    return tex;
-}
 
 } // namespace
 
