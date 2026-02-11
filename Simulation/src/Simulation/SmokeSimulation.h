@@ -105,7 +105,7 @@ public:
     [[nodiscard]] int getSmokeNz() const { return m_nz; }
     [[nodiscard]] int getSmokeCellCount() const;
 
-    static constexpr UINT8 minJacobiIterationsValue = 1;
+    static constexpr UINT8 minJacobiIterationsValue = 0;
     static constexpr UINT8 maxJacobiIterationsValue = 100;
 private:
     Grid m_grid;
@@ -174,5 +174,5 @@ private:
     const float FIXED_DT = 1.f / 60.f;  // 60Hz physics tick
     const float MAX_DT = 0.25f;         // Prevent spiral of death
 
-    UINT8 m_numJacobiIterations{ 30 }; // więcej = dokładniejszy solver ciśnienia, ale wolniejszy
+    UINT8 m_numJacobiIterations{ 30 };
 };

@@ -380,17 +380,15 @@ void SmokeSimulation::coolTemperature(float dt) {
             }
 }
 
-// Prosta funkcja szumu 3D (hash-based)
 float SmokeSimulation::noise3D(float x, float y, float z) const {
-    // Szybki hash dla pseudo-losowego szumu
     auto hash = [](int n) -> float {
         n = (n << 13) ^ n;
         return 1.0f - ((n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff) / 1073741824.0f;
     };
     
-    int ix = static_cast<int>(std::floor(x));
-    int iy = static_cast<int>(std::floor(y));
-    int iz = static_cast<int>(std::floor(z));
+    const int ix = static_cast<int>(std::floor(x));
+    const int iy = static_cast<int>(std::floor(y));
+    const int iz = static_cast<int>(std::floor(z));
     float fx = x - ix;
     float fy = y - iy;
     float fz = z - iz;
@@ -402,22 +400,22 @@ float SmokeSimulation::noise3D(float x, float y, float z) const {
     
     auto idx = [](int x, int y, int z) { return x + y * 57 + z * 113; };
     
-    float v000 = hash(idx(ix, iy, iz));
-    float v100 = hash(idx(ix + 1, iy, iz));
-    float v010 = hash(idx(ix, iy + 1, iz));
-    float v110 = hash(idx(ix + 1, iy + 1, iz));
-    float v001 = hash(idx(ix, iy, iz + 1));
-    float v101 = hash(idx(ix + 1, iy, iz + 1));
-    float v011 = hash(idx(ix, iy + 1, iz + 1));
-    float v111 = hash(idx(ix + 1, iy + 1, iz + 1));
+    const float v000 = hash(idx(ix, iy, iz));
+    const float v100 = hash(idx(ix + 1, iy, iz));
+    const float v010 = hash(idx(ix, iy + 1, iz));
+    const float v110 = hash(idx(ix + 1, iy + 1, iz));
+    const float v001 = hash(idx(ix, iy, iz + 1));
+    const float v101 = hash(idx(ix + 1, iy, iz + 1));
+    const float v011 = hash(idx(ix, iy + 1, iz + 1));
+    const float v111 = hash(idx(ix + 1, iy + 1, iz + 1));
     
-    float v00 = v000 * (1 - fx) + v100 * fx;
-    float v01 = v001 * (1 - fx) + v101 * fx;
-    float v10 = v010 * (1 - fx) + v110 * fx;
-    float v11 = v011 * (1 - fx) + v111 * fx;
+    const float v00 = v000 * (1 - fx) + v100 * fx;
+    const float v01 = v001 * (1 - fx) + v101 * fx;
+    const float v10 = v010 * (1 - fx) + v110 * fx;
+    const float v11 = v011 * (1 - fx) + v111 * fx;
     
-    float v0 = v00 * (1 - fy) + v10 * fy;
-    float v1 = v01 * (1 - fy) + v11 * fy;
+    const float v0 = v00 * (1 - fy) + v10 * fy;
+    const float v1 = v01 * (1 - fy) + v11 * fy;
     
     return v0 * (1 - fz) + v1 * fz;
 }
@@ -732,16 +730,17 @@ void SmokeSimulation::pressureSolve(int iterations) {
         return m_pressure[flidx(i, j, k)];
     };
 
+    constexpr int nn = 6;
+    
     for (int it = 0; it < iterations; ++it) {
         for (int k = 0; k < m_nz; ++k)
             for (int j = 0; j < m_ny; ++j)
                 for (int i = 0; i < m_nx; ++i) {
                     if (isSolid(i, j, k) ) continue;
-                    float sum = pNeighbor(i + 1, j, k) + pNeighbor(i - 1, j, k)
+                    const float sum = pNeighbor(i + 1, j, k) + pNeighbor(i - 1, j, k)
                               + pNeighbor(i, j + 1, k) + pNeighbor(i, j - 1, k)
                               + pNeighbor(i, j, k + 1) + pNeighbor(i, j, k - 1);
-                    const int nn = 6;
-                    size_t id = flidx(i, j, k);
+                    const size_t id = flidx(i, j, k);
                     m_tmpPressure[id] = (sum - dx2 * div[id]) / static_cast<float>(nn);
                 }
         m_pressure.swap(m_tmpPressure);
@@ -760,14 +759,14 @@ void SmokeSimulation::project() {
         for (int j = 0; j < m_ny; ++j)
             for (int i = 0; i < m_nx; ++i) {
                 if (isSolid(i, j, k) ) continue;
-                size_t id = flidx(i, j, k);
+                const size_t id = flidx(i, j, k);
                 
-                float pL = pAt(i - 1, j, k), pR = pAt(i + 1, j, k);
-                float pB = pAt(i, j - 1, k), pT = pAt(i, j + 1, k);
-                float pK = pAt(i, j, k - 1), pF = pAt(i, j, k + 1);
-                float dpdx = (pR - pL) / (2.f * dx);
-                float dpdy = (pT - pB) / (2.f * dx);
-                float dpdz = (pF - pK) / (2.f * dx);
+                const float pL = pAt(i - 1, j, k), pR = pAt(i + 1, j, k);
+                const float pB = pAt(i, j - 1, k), pT = pAt(i, j + 1, k);
+                const float pK = pAt(i, j, k - 1), pF = pAt(i, j, k + 1);
+                const float dpdx = (pR - pL) / (2.f * dx);
+                const float dpdy = (pT - pB) / (2.f * dx);
+                const float dpdz = (pF - pK) / (2.f * dx);
                 m_velocityX[id] -= dpdx;
                 m_velocityY[id] -= dpdy;
                 m_velocityZ[id] -= dpdz;
@@ -777,7 +776,7 @@ void SmokeSimulation::project() {
         for (int j = 0; j < m_ny; ++j)
             for (int i = 0; i < m_nx; ++i) {
                 if (isSolid(i, j, k)) {
-                    size_t id = flidx(i, j, k);
+                    const size_t id = flidx(i, j, k);
                     m_velocityX[id] = m_velocityY[id] = m_velocityZ[id] = 0.f;
                 }
                 if (i == 0 || i == m_nx - 1) m_velocityX[flidx(i, j, k)] = 0.f;

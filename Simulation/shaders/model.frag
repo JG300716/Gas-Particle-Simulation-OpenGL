@@ -7,7 +7,7 @@ out vec4 FragColor;
 uniform vec3 uColor;
 uniform bool uUseTexture;
 uniform sampler2D uTexture;
-uniform vec3 uLightDir;  // kierunek światła (znormalizowany)
+uniform vec3 uLightDir;
 
 void main() {
     vec3 n = normalize(vNormal);
